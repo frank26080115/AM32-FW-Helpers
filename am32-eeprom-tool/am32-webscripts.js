@@ -253,6 +253,15 @@ function toHexString(x)
     return "0x" + hex.toUpperCase();
 }
 
+function serport_buttonsSetDisabled(disabled)
+{
+    document.getElementById("btn_serread" ).disabled   = disabled;
+    document.getElementById("btn_serwrite").disabled   = disabled;
+    document.getElementById("btn_sererase").disabled   = disabled;
+    document.getElementById("btn_serrefresh").disabled = disabled;
+    document.getElementById("btn_serrunapp").disabled  = disabled;
+}
+
 function serport_btnRead()
 {
     debug_textbox.value = "";

@@ -78,20 +78,10 @@ function onload()
 
     if ("serial" in navigator)
     {
-        document.getElementById("btn_serread" ).disabled = true;
-        document.getElementById("btn_serwrite").disabled = true;
-        document.getElementById("btn_sererase").disabled = true;
-        document.getElementById("btn_serrefresh").disabled = true;
-        switch(window.location.protocol) {
-            case 'http:':
-            case 'https:':
-                document.getElementById("div_serialport").display = "none";
-                document.getElementById("div_serialport_download").display = "block";
-                break;
-            case 'file:':
-                break;
-            default: 
-            //some other protocol
+        serport_buttonsSetDisabled(true);
+        if (window.location.protocol.startsWith("http")) {
+            document.getElementById("div_serialport").style.display = "none";
+            document.getElementById("div_serialport_download").style.display = "block";
         }
     }
     else

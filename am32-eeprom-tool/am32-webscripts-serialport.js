@@ -29,10 +29,7 @@ async function serport_connect()
         btn.value = "Disconnect";
         btn.onclick = serport_disconnect;
         document.getElementById("span_serport").innerHTML = "(connected)";
-        document.getElementById("btn_serread" ).disabled  = false;
-        document.getElementById("btn_serwrite").disabled  = false;
-        document.getElementById("btn_sererase").disabled  = false;
-        document.getElementById("btn_serrefresh").disabled = false;
+        serport_buttonsSetDisabled(false);
         serport_hasQuery = false;
         serport_fifo = null;
 
@@ -42,10 +39,7 @@ async function serport_connect()
             btn.value = "Disconnect";
             btn.onclick = serport_disconnect;
             document.getElementById("span_serport").innerHTML = "(connected)";
-            document.getElementById("btn_serread" ).disabled  = false;
-            document.getElementById("btn_serwrite").disabled  = false;
-            document.getElementById("btn_sererase").disabled  = false;
-            document.getElementById("btn_serrefresh").disabled = false;
+            serport_buttonsSetDisabled(false);
             serport_hasQuery = false;
             serport_fifo = null;
         });
@@ -57,10 +51,7 @@ async function serport_connect()
             btn.value = "Connect";
             btn.onclick = serport_connect;
             document.getElementById("span_serport").innerHTML = "";
-            document.getElementById("btn_serread" ).disabled = true;
-            document.getElementById("btn_serwrite").disabled = true;
-            document.getElementById("btn_sererase").disabled = true;
-            document.getElementById("btn_serrefresh").disabled = true;
+            serport_buttonsSetDisabled(true);
             serport_hasQuery = false;
             serport_fifo = null;
         });
@@ -80,10 +71,7 @@ async function serport_disconnect()
     btn.onclick = serport_connect;
     serport = null;
     document.getElementById("span_serport").innerHTML = "";
-    document.getElementById("btn_serread" ).disabled = true;
-    document.getElementById("btn_serwrite").disabled = true;
-    document.getElementById("btn_sererase").disabled = true;
-    document.getElementById("btn_serrefresh").disabled = true;
+    serport_buttonsSetDisabled(true);
     serport_hasQuery = false;
     serport_fifo = null;
 }
