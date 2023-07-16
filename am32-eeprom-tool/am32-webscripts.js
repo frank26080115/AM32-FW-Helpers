@@ -13,6 +13,9 @@ function make_checkbox(x)
         t += " checked=\"checked\"";
     }
     t += " /></div>\r\n";
+    if (x[2] >= eeprom_useful_length) {
+        debug_textbox.value += "warning: slider \"" + x[0] + "\"'s EEPROM index is over the EEPROM expected length\r\n";
+    }
     return t;
 }
 
@@ -30,6 +33,9 @@ function make_slider(x, i)
     t += " oninput=\"sld_onchange(" + i + ")\"";
     t += " /></div>\r\n";
     t += "<div style=\"display: table-cell; padding-left:5pt;\">def = " + x[1] + "</div>\r\n";
+    if (x[6] >= eeprom_useful_length) {
+        debug_textbox.value += "warning: slider \"" + x[0] + "\"'s EEPROM index is over the EEPROM expected length\r\n";
+    }
     return t;
 }
 
@@ -241,8 +247,35 @@ function generateBin()
 function saveBinFile()
 {
     debug_textbox.value = "";
-    saveByteArray(generateBin(), "am32-eeprom.bin");
+    var fname = document.getElementById("txt_savefname").value;
+    if (fname.length > 0) {
+        if (filename_isValid(fname)) {
+            if (fname.toLowerCase().endsWith(".bin") == false) {
+                fname += ".bin";
+            }
+            while (fname.includes("..")) {
+                fname = fname.replaceAll("..", ".");
+            }
+        }
+        else {
+            debug_textbox.value = "warning: invalid save file name, using default name instead\r\n";
+            fname = "";
+        }
+    }
+    if (fname.length <= 0) {
+        fname = "am32-eeprom.bin";
+    }
+    saveByteArray(generateBin(), fname);
 }
+
+var filename_isValid=(function(){
+  var rg1=/^[^\\/:\*\?"<>\|]+$/; // forbidden characters \ / : * ? " < > |
+  var rg2=/^\./; // cannot start with dot (.)
+  var rg3=/^(nul|prn|con|lpt[0-9]|com[0-9])(\.|$)/i; // forbidden file names
+  return function filename_isValid(fname){
+    return rg1.test(fname)&&!rg2.test(fname)&&!rg3.test(fname);
+  }
+})();
 
 function toHexString(x)
 {

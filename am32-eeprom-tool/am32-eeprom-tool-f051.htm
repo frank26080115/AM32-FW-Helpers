@@ -27,8 +27,8 @@ var all_checkboxes = [
 var all_sliders = [
     // Name                  ,  def ,  min ,  max ,   step, offset, byte, readonly
     ["Bootloader Version"    ,    12,     1,   254,      1,      0,    2, true , ],
-    ["FW Version Major"      ,     1,     0,   255,      1,      0,    3, true , ],
-    ["FW Version Minor"      ,     1,     0,   255,      1,      0,    4, true , ],
+    ["FW Version Major"      ,     0,     0,   255,      1,      0,    3, true , ],
+    ["FW Version Minor"      ,     0,     0,   255,      1,      0,    4, true , ],
     ["Timing Advance"        ,     2,     0,     3,      1,      0,   23, false, ],
     ["Motor KV"              ,  2000,    20, 10220,     40,     20,   26, false, ],
     ["Motor Poles"           ,    14,     0,   255,      1,      0,   27, false, ],
@@ -57,6 +57,7 @@ var saveByteArray; // this is a function
 
 function onload()
 {
+    debug_textbox = document.getElementById("txt_debug");
     document.getElementById("file-input").addEventListener("change", readBinFile, false);
     document.getElementById("tbl_checkboxes").innerHTML = make_all_checkboxes();
     document.getElementById("tbl_sliders").innerHTML    = make_all_sliders();
@@ -88,8 +89,6 @@ function onload()
     {
         document.getElementById("div_serialport").innerHTML = "WebSerial is not supported by your browser";
     }
-
-    debug_textbox = document.getElementById("txt_debug");
 }
 
 var debug_textbox;
@@ -110,7 +109,7 @@ var debug_textbox;
             </div>
             <div style="display: table-cell;">
                 <fieldset><legend>Save *.BIN File</legend>
-                    <input type="button" value="Save" onclick="saveBinFile()" />
+                    <input type="button" value="Save" onclick="saveBinFile()" />&nbsp;<input type="text" value="" id="txt_savefname" />
                 </fieldset>
             </div>
         </div>
