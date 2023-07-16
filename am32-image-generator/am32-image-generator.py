@@ -6,6 +6,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("bootloader", type=str, help="bootloader file")
     parser.add_argument("firmware", type=str, help="firmware file")
+    parser.add_argument("-r", "--replace", action="store_true", help="replace instead of ignore during merge")
+    parser.add_argument("-n", "--fresh", action="store_true", help="make the EEPROM look fresh")
     parser.add_argument("-a", "--baseaddr", metavar="baseaddr", default="0x08000000", type=str, help="base address")
     parser.add_argument("-e", "--eeprom", metavar="eeprom", default=None, type=str, help="eeprom file")
     parser.add_argument("-x", "--eepromaddr", metavar="eepromaddr", default="0x7C00", type=str, help="eeprom address")
@@ -24,52 +26,66 @@ def main():
     if args.verbose:
         print("base address 0x%08X" % base_address)
 
-    bl_fullpath = os.path.abspath(args.bootloader)
-    bl_basename = os.path.basename(bl_fullpath)
-    bl_namesplit = os.path.splitext(bl_basename)
-    bl_justname = bl_namesplit[0].strip()
-    bl_ext = bl_namesplit[1].strip().lower()
-    if args.verbose:
-        print("bootloader:")
-        print("\t" + bl_fullpath)
-        print("\t%s (%s)" % (bl_basename, bl_ext))
+    bl_justname = None
+    if args.bootloader != 'x':
+        bl_fullpath = os.path.abspath(args.bootloader)
+        bl_basename = os.path.basename(bl_fullpath)
+        bl_namesplit = os.path.splitext(bl_basename)
+        bl_justname = bl_namesplit[0].strip()
+        bl_ext = bl_namesplit[1].strip().lower()
+        if args.verbose:
+            print("bootloader:")
+            print("\t" + bl_fullpath)
+            print("\t%s (%s)" % (bl_basename, bl_ext))
 
-    if bl_ext == ".bin":
-        bl_ihex = IntelHex()
-        bl_ihex.loadbin(bl_fullpath, offset = base_address)
-    elif bl_ext == ".hex":
-        bl_ihex = IntelHex(bl_fullpath)
-    else:
-        raise Exception("unknown bootloader file type, must be *.bin or *.hex")
+        if bl_ext == ".bin":
+            bl_ihex = IntelHex()
+            bl_ihex.loadbin(bl_fullpath, offset = base_address)
+        elif bl_ext == ".hex":
+            bl_ihex = IntelHex(bl_fullpath)
+        else:
+            raise Exception("unknown bootloader file type, must be *.bin or *.hex")
 
-    if args.verbose:
-        print("bootloader from 0x%08X to 0x%08X" % (bl_ihex.minaddr(), bl_ihex.maxaddr()))
+        if args.verbose:
+            print("bootloader from 0x%08X to 0x%08X" % (bl_ihex.minaddr(), bl_ihex.maxaddr()))
 
-    fw_fullpath = os.path.abspath(args.firmware)
-    fw_basename = os.path.basename(fw_fullpath)
-    fw_namesplit = os.path.splitext(fw_basename)
-    fw_justname = fw_namesplit[0].strip()
-    fw_ext = fw_namesplit[1].strip().lower()
-    if args.verbose:
-        print("firmware:")
-        print("\t" + fw_fullpath)
-        print("\t%s (%s)" % (fw_basename, fw_ext))
+    fw_justname = None
+    if args.firmware != 'x':
+        fw_fullpath = os.path.abspath(args.firmware)
+        fw_basename = os.path.basename(fw_fullpath)
+        fw_namesplit = os.path.splitext(fw_basename)
+        fw_justname = fw_namesplit[0].strip()
+        fw_ext = fw_namesplit[1].strip().lower()
+        if args.verbose:
+            print("firmware:")
+            print("\t" + fw_fullpath)
+            print("\t%s (%s)" % (fw_basename, fw_ext))
 
-    if fw_ext != ".hex":
-        raise Exception("unknown firmware file type, must be *.hex")
+        if fw_ext != ".hex":
+            raise Exception("unknown firmware file type, must be *.hex")
 
-    fw_ihex = IntelHex(fw_fullpath)
+        fw_ihex = IntelHex(fw_fullpath)
 
-    if args.verbose:
-        print("fw from 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
+        if args.verbose:
+            print("fw from 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
 
-    if fw_ihex.minaddr() - 1 <= bl_ihex.maxaddr():
-        raise Exception("error: firmware overlaps with bootloader")
+    if args.bootloader == 'x' and args.firmware == 'x':
+        raise Exception("error: no files specified")
+    elif args.bootloader != 'x' and args.firmware != 'x':
+        if args.replace == False:
+            if fw_ihex.minaddr() - 1 <= bl_ihex.maxaddr():
+                raise Exception("error: firmware overlaps with bootloader")
+            bl_ihex.merge(fw_ihex, overlap='ignore')
+        else: # replace == True
+            fw_binarr = fw_ihex.tobinarray(start = base_address)
+            fw_chunk = IntelHex()
+            fw_chunk.frombytes(fw_binarr, offset = base_address)
+            bl_ihex.merge(fw_chunk, overlap='replace')
 
-    bl_ihex.merge(fw_ihex, overlap='ignore')
-
-    if args.verbose:
-        print("merged data from 0x%08X to 0x%08X" % (bl_ihex.minaddr(), bl_ihex.maxaddr()))
+        if args.verbose:
+            print("merged data from 0x%08X to 0x%08X" % (bl_ihex.minaddr(), bl_ihex.maxaddr()))
+    elif args.bootloader == 'x':
+        bl_ihex = fw_ihex
 
     eep_justname = None
     if "0x" in args.eepromaddr.lower():
@@ -101,6 +117,11 @@ def main():
             print("eeprom from 0x%08X to 0x%08X" % (eep_ihex.minaddr(), eep_ihex.maxaddr()))
         if eep_ihex.minaddr() - 1 <= bl_ihex.maxaddr():
             raise Exception("error: eeprom overlaps with firmware")
+        if args.fresh:
+            eep_ihex[base_address + eep_addr + 3] = 0
+            eep_ihex[base_address + eep_addr + 4] = 0
+            if args.verbose:
+                print("eeprom address 3 and 4 erased to appear fresh")
         bl_ihex.merge(eep_ihex, overlap='replace')
 
     if args.outpath is None:
@@ -114,12 +135,19 @@ def main():
                 raise Exception("cannot overwrite %s" % out_abspath)
         else:
             os.makedirs(out_abspath)
-        nfname = bl_justname + "_" + fw_justname
+        nfname = ""
+        if bl_justname is not None and len(bl_justname) > 0:
+            nfname += bl_justname
+            if fw_justname is not None and len(fw_justname) > 0:
+                nfname += "_"
+        if fw_justname is not None and len(fw_justname) > 0:
+            nfname += fw_justname
         if eep_justname is not None and len(eep_justname) > 0:
             nfname += "_" + eep_justname
         nfname = nfname.replace("-", "_").replace(" ", "_")
+        nfname = nfname.strip('_')
         while "_." in nfname or "._" in nfname or ".." in nfname or "__" in nfname:
-            nfname = nfname.replace("_.", "_").replace("._", "_").replace("..", ".").replace("__", "_")
+            nfname = nfname.replace("_.", "_").replace("._", "_").replace("..", ".").replace("__", "_").strip('_')
         out_abspath = os.path.join(out_abspath, nfname + ".hex")
 
     if bl_ihex.maxaddr() < base_address + eep_addr:
