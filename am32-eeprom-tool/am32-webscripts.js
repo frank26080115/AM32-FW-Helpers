@@ -244,10 +244,8 @@ function generateBin()
     return buffer8;
 }
 
-function saveBinFile()
+function getBinFileName(fname, default_name)
 {
-    debug_textbox.value = "";
-    var fname = document.getElementById("txt_savefname").value;
     if (fname.length > 0) {
         if (filename_isValid(fname)) {
             if (fname.toLowerCase().endsWith(".bin") == false) {
@@ -263,9 +261,16 @@ function saveBinFile()
         }
     }
     if (fname.length <= 0) {
-        fname = "am32-eeprom.bin";
+        fname = default_name;
     }
-    saveByteArray(generateBin(), fname);
+    return fname;
+}
+
+function saveBinFile()
+{
+    debug_textbox.value = "";
+    var fname = document.getElementById("txt_savefname").value;
+    saveByteArray(generateBin(), getBinFileName(fname, "am32-eeprom.bin"));
 }
 
 var filename_isValid=(function(){
@@ -286,6 +291,27 @@ function toHexString(x)
     return "0x" + hex.toUpperCase();
 }
 
+function uint8ArrayMerge(x, y)
+{
+    if (x == null)
+    {
+        x = new Uint8Array(y.length);
+        for (var i = 0; i < y.length; i++) {
+            x[i] = y[i];
+        }
+    }
+    else
+    {
+        var mergedArray = new Uint8Array(x.length + y.length);
+        mergedArray.set(x);
+        for (var i = 0, j = y.length; i < y.length && j < mergedArray.length; i++, j++) {
+            mergedArray[j] = y[i];
+        }
+        x = mergedArray; 
+    }
+    return x;
+}
+
 function serport_buttonsSetDisabled(disabled)
 {
     document.getElementById("btn_serread" ).disabled   = disabled;
@@ -293,6 +319,8 @@ function serport_buttonsSetDisabled(disabled)
     document.getElementById("btn_sererase").disabled   = disabled;
     document.getElementById("btn_serrefresh").disabled = disabled;
     document.getElementById("btn_serrunapp").disabled  = disabled;
+    document.getElementById("btn_fwupdate").disabled  = disabled;
+    document.getElementById("btn_fwdump").disabled  = disabled;
 }
 
 function serport_btnRead()
@@ -307,7 +335,7 @@ function serport_btnRead()
 function serport_writeAndVerify(barr_sent, message)
 {
     debug_textbox.value = "";
-    serport_writeBinary(barr_sent, eeprom_useful_length, function() {
+    serport_writeBinary(barr_sent, eeprom_offset, eeprom_useful_length, function() {
         serport_readBinary(function(barr_read) {
             if (barr_read.length < 
             //barr_sent.length
@@ -352,5 +380,47 @@ function serport_btnRunApp()
 {
     serport_tx(serport_genRunCmd(), async function () {
         debug_textbox.value += "ESC may have rebooted\r\n";
+    });
+}
+
+function serport_fwupdate(e)
+{
+    debug_textbox.value = "";
+    var file = e.target.files[0];
+    if (!file) {
+        return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            let memMap = MemoryMap.fromHex(e.target.result);
+            let fwArr = memMap.slicePad(flash_start + flash_fw_start, eeprom_offset - flash_fw_start);
+            serport_writeFirmware(fwArr, fwArr.length, function(good) {
+                if (good) {
+                    debug_textbox.value += "finished verifying all FW chunks\r\n";
+                }
+                else {
+                    debug_textbox.value += "finished attempting to verify FW, has failures\r\n";
+                }
+            });
+        }
+        catch (ex) {
+            debug_textbox.value += "error: exception while reading/sending firmware: " + ex.toString();
+        }
+    };
+    reader.readAsText(file);
+}
+
+function serport_fwdump()
+{
+    let fname = prompt("Dump file name?");
+    if (fname == null) {
+        return;
+    }
+    fname = getBinFileName(fname, "am32-fw.bin");
+    debug_textbox.value = "";
+    serport_readFirmware(function(data) {
+        debug_textbox.value += "finished reading FW bin\r\n";
+        saveByteArray(data, fname);
     });
 }

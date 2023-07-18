@@ -17,24 +17,17 @@ async function serport_connect()
     }
     if (toopen)
     {
-        const port = await navigator.serial.requestPort();
+        debug_textbox.value = "";
+        try
+        {
+            const port = await navigator.serial.requestPort();
 
-        await port.open({ baudRate: 19200 });
+            await port.open({ baudRate: 19200 });
 
-        serport = port;
-        serport_writer = await port.writable.getWriter();
-        serport_reader = await port.readable.getReader();
+            serport = port;
+            serport_writer = await port.writable.getWriter();
+            serport_reader = await port.readable.getReader();
 
-        var btn = document.getElementById("btn_serconnect");
-        btn.value = "Disconnect";
-        btn.onclick = serport_disconnect;
-        document.getElementById("span_serport").innerHTML = "(connected)";
-        serport_buttonsSetDisabled(false);
-        serport_hasQuery = false;
-        serport_fifo = null;
-
-        port.addEventListener("connect", (event) => {
-            console.log("port on connect");
             var btn = document.getElementById("btn_serconnect");
             btn.value = "Disconnect";
             btn.onclick = serport_disconnect;
@@ -42,19 +35,34 @@ async function serport_connect()
             serport_buttonsSetDisabled(false);
             serport_hasQuery = false;
             serport_fifo = null;
-        });
 
-        port.addEventListener("disconnect", (event) => {
-            console.log("port on disconnect");
-            serport = null;
-            var btn = document.getElementById("btn_serconnect");
-            btn.value = "Connect";
-            btn.onclick = serport_connect;
-            document.getElementById("span_serport").innerHTML = "";
-            serport_buttonsSetDisabled(true);
-            serport_hasQuery = false;
-            serport_fifo = null;
-        });
+            port.addEventListener("connect", (event) => {
+                console.log("port on connect");
+                var btn = document.getElementById("btn_serconnect");
+                btn.value = "Disconnect";
+                btn.onclick = serport_disconnect;
+                document.getElementById("span_serport").innerHTML = "(connected)";
+                serport_buttonsSetDisabled(false);
+                serport_hasQuery = false;
+                serport_fifo = null;
+            });
+
+            port.addEventListener("disconnect", (event) => {
+                console.log("port on disconnect");
+                serport = null;
+                var btn = document.getElementById("btn_serconnect");
+                btn.value = "Connect";
+                btn.onclick = serport_connect;
+                document.getElementById("span_serport").innerHTML = "";
+                serport_buttonsSetDisabled(true);
+                serport_hasQuery = false;
+                serport_fifo = null;
+            });
+        }
+        catch (ex)
+        {
+            debug_textbox.value = "FAILED to open serial port, error exception: " + ex.toString();
+        }
     }
 }
 
@@ -78,22 +86,7 @@ async function serport_disconnect()
 
 function serport_fifoPush(x)
 {
-    if (serport_fifo == null)
-    {
-        serport_fifo = new Uint8Array(x.length);
-        for (var i = 0; i < x.length; i++) {
-            serport_fifo[i] = x[i];
-        }
-    }
-    else
-    {
-        var mergedArray = new Uint8Array(serport_fifo.length + x.length);
-        mergedArray.set(serport_fifo);
-        for (var i = 0, j = serport_fifo.length; i < x.length && j < mergedArray.length; i++, j++) {
-            mergedArray[j] = x[i];
-        }
-        serport_fifo = mergedArray; 
-    }
+    serport_fifo = uint8ArrayMerge(serport_fifo, x);
 }
 
 function serport_fifoPopBlindCnt(cnt)
@@ -111,11 +104,15 @@ async function serport_resetReader()
     serport_fifo = null;
 }
 
+var serport_txEchoReadAttempts;
+var serport_txEchoBuffer;
+
 async function serport_tx(data, cb)
 {
     if (serport == null) {
         return;
     }
+    serport_txEchoReadAttempts = 0;
     var buffer = new ArrayBuffer(data.length);
     var buffer8 = new Uint8Array(buffer);
     for (var i = 0; i < data.length; i++) { buffer8[i] = data[i]; }
@@ -123,14 +120,23 @@ async function serport_tx(data, cb)
     console.log(buffer8);
     await serport_writer.write(buffer8);
     serport_echocnt = buffer8.length;
+    serport_txEchoBuffer = buffer8;
     setTimeout(async function () {
-        if (serport == null) {
-            debug_textbox.value += "error: serial port is null\r\n";
-            return;
-        }
-        var r = 0;
-        
-        while (serport.readable)
+        await serport_txReadEcho(cb);
+    }, pkt_time);
+}
+
+async function serport_txReadEcho(cb)
+{
+    if (serport == null) {
+        debug_textbox.value += "error: serial port is null\r\n";
+        return;
+    }
+
+    var r = 0;
+    while (serport.readable)
+    {
+        try
         {
             let { value, done } = await Promise.race([
                     serport_reader.read(),
@@ -145,15 +151,15 @@ async function serport_tx(data, cb)
                     r += value.length;
                     serport_fifoPush(value);
                     console.log(serport_fifo);
-                    done = (r >= buffer8.length);
+                    done = (r >= serport_txEchoBuffer.length);
                 }
             }
             if (done)
             {
-                if (serport_fifo.length >= buffer8.length)
+                if (serport_fifo.length >= serport_txEchoBuffer.length)
                 {
-                    for (var i = 0; i < buffer8.length; i++) {
-                        if (serport_fifo[i] != buffer8[i]) {
+                    for (var i = 0; i < serport_txEchoBuffer.length; i++) {
+                        if (serport_fifo[i] != serport_txEchoBuffer[i]) {
                             debug_textbox.value += "warning: echo content does not match sent data\r\n";
                             break;
                         }
@@ -167,11 +173,24 @@ async function serport_tx(data, cb)
                 break;
             }
         }
+        catch (ex)
+        {
+            break;
+        }
+    }
+
+    if (serport_txEchoReadAttempts <= 0) {
         if (cb) {
             console.log("serport tx calling cb");
             cb();
         }
-    }, pkt_time);
+    }
+    else {
+        serport_txEchoReadAttempts -= 1;
+        setTimeout(async function () {
+            await serport_txReadEcho(cb);
+        }, pkt_time);
+    }
 }
 
 async function serport_readToEnd()
@@ -204,7 +223,7 @@ async function serport_readToEnd()
                 new Promise((_, reject) => setTimeout(function() {
                     console.log("serport_readToEnd timeout");
                     if (serport_fifo == null || serport_fifo.length <= 0) {
-                        debug_textbox.value += "error: serial port timed out reading\r\n";
+                        //debug_textbox.value += "error: serial port timed out reading\r\n";
                     }
                     var empty = [];
                     return [ empty, true ];
@@ -250,9 +269,18 @@ async function serport_readBinaryInner(proc_cb)
             , async function () { // sent read
 
             var data1 = await serport_readToEnd();
-            if (data1 == null || data1.length < eeprom_useful_length) {
+            if (data1 == null) { // || data1.length < eeprom_useful_length) {
                 debug_textbox.value += "ESC failed to reply first data packet\r\n";
                 return;
+            }
+            else if (data1.length < eeprom_useful_length) {
+                await serport_resetReader();
+                var data3 = await serport_readToEnd();
+                data1 = uint8ArrayMerge(data1, data3);
+                if (data1.length < eeprom_useful_length) {
+                    debug_textbox.value += "ESC failed to reply with first data packet (too short, " + data1.length + " bytes)\r\n";
+                    return;
+                }
             }
 
             await serport_resetReader();
@@ -272,9 +300,18 @@ async function serport_readBinaryInner(proc_cb)
                     , async function () {
 
                     var data2 = await serport_readToEnd();
-                    if (data2 == null || data2.length < (eeprom_total_length - eeprom_useful_length)) {
+                    if (data2 == null) { // || data2.length < (eeprom_total_length - eeprom_useful_length)) {
                         debug_textbox.value += "ESC failed to reply with second data packet\n";
                         return;
+                    }
+                    else if (data2.length < (eeprom_total_length - eeprom_useful_length)) {
+                        await serport_resetReader();
+                        var data3 = await serport_readToEnd();
+                        data2 = uint8ArrayMerge(data2, data3);
+                        if (data2.length < (eeprom_total_length - eeprom_useful_length)) {
+                            debug_textbox.value += "ESC failed to reply with second data packet (too short, " + data2.length + " bytes)\r\n";
+                            return;
+                        }
                     }
 
                     var buffer = new ArrayBuffer(eeprom_total_length);
@@ -301,6 +338,82 @@ async function serport_readBinaryInner(proc_cb)
     }); // sent set address
 }
 
+async function serport_readMemoryChunk(start_addr, len, proc_cb)
+{
+    await serport_resetReader();
+    await serport_tx(serport_genSetAddressCmd(start_addr), async function () { // sent set address
+
+        var tmp = await serport_readToEnd();
+        if (tmp == null || tmp.length < 1 || tmp[0] != ack_byte) {
+            debug_textbox.value += "ESC failed to ack address set command\r\n";
+            return;
+        }
+
+        await serport_resetReader();
+        await serport_tx(serport_genReadCmd(len), async function () { // sent read
+
+            var data = await serport_readToEnd();
+            if (data == null) {
+                debug_textbox.value += "ESC failed to reply data packet\r\n";
+                return;
+            }
+            else if (data.length < len) {
+                await serport_resetReader();
+                var data2 = await serport_readToEnd();
+                data = uint8ArrayMerge(data, data2);
+                if (data.length < len) {
+                    debug_textbox.value += "ESC failed to reply data packet (too short, " + data.length + " bytes)\r\n";
+                    return;
+                }
+            }
+
+            if (proc_cb) {
+                proc_cb(data);
+            }
+        }); // sent read
+    }); // sent set address
+}
+
+async function serport_issueInitQuery(proc_cb)
+{
+    await serport_tx(serport_genInitQuery(), async function () { // sent query
+
+        var tmp = await serport_readToEnd();
+        if (tmp == null || tmp.length < 9) {
+            debug_textbox.value += "ESC failed to reply to initial query\r\n";
+            if (tmp != null && tmp.length > 0) {
+                debug_textbox.value += "reply: ";
+                var mismatched = 0;
+                for (var i = 0; i < tmp.length; i++) {
+                    debug_textbox.value += toHexString(tmp[i]) + " ";
+                    if (i >= device_id.length) {
+                        mismatched += 1;
+                    }
+                    else if (tmp[i] != device_id[i]) {
+                        mismatched += 1;
+                    }
+                }
+                debug_textbox.value += "\r\n";
+                if (mismatched >= 2) {
+                    debug_textbox.value += "warning: device identifier might be wrong\r\n";
+                }
+            }
+            return;
+        }
+
+        debug_textbox.value += "ESC query reply: ";
+        for (var i = 0; i < serport_fifo.length; i++) {
+            debug_textbox.value += toHexString(serport_fifo[i]) + " ";
+        }
+        debug_textbox.value += "\r\n";
+        serport_hasQuery = true;
+
+        if (proc_cb) {
+            await proc_cb();
+        }
+    }); // sent query
+}
+
 async function serport_readBinary(proc_cb)
 {
     if (serport == null) {
@@ -309,40 +422,9 @@ async function serport_readBinary(proc_cb)
     await serport_resetReader();
     if (serport_hasQuery == false)
     {
-        await serport_tx(serport_genInitQuery(), async function () { // sent query
-
-            var tmp = await serport_readToEnd();
-            if (tmp == null || tmp.length < 9) {
-                debug_textbox.value += "ESC failed to reply to initial query\r\n";
-                if (tmp != null && tmp.length > 0) {
-                    debug_textbox.value += "reply: ";
-                    var mismatched = 0;
-                    for (var i = 0; i < tmp.length; i++) {
-                        debug_textbox.value += toHexString(tmp[i]) + " ";
-                        if (i >= device_id.length) {
-                            mismatched += 1;
-                        }
-                        else if (tmp[i] != device_id[i]) {
-                            mismatched += 1;
-                        }
-                    }
-                    debug_textbox.value += "\r\n";
-                    if (mismatched >= 2) {
-                        debug_textbox.value += "warning: device identifier might be wrong\r\n";
-                    }
-                }
-                return;
-            }
-
-            debug_textbox.value += "ESC query reply: ";
-            for (var i = 0; i < serport_fifo.length; i++) {
-                debug_textbox.value += toHexString(serport_fifo[i]) + " ";
-            }
-            debug_textbox.value += "\r\n";
-            serport_hasQuery = true;
-
+        await serport_issueInitQuery( async function () {
             await serport_readBinaryInner(proc_cb);
-        }); // sent query
+        });
     }
     else
     {
@@ -350,10 +432,10 @@ async function serport_readBinary(proc_cb)
     }
 }
 
-async function serport_writeBinaryInner(payload, len, cb)
+async function serport_writeBinaryInner(payload, start_addr, len, cb)
 {
     await serport_resetReader();
-    await serport_tx(serport_genSetAddressCmd(eeprom_offset)
+    await serport_tx(serport_genSetAddressCmd(start_addr)
         // [0xFF, 0x00, 0x7C, 0x00, 0x10, 0xD4]
         , async function () { // sent set address
 
@@ -400,7 +482,7 @@ async function serport_writeBinaryInner(payload, len, cb)
     }); // sent set address
 }
 
-async function serport_writeBinary(payload, len, cb)
+async function serport_writeBinary(payload, start_addr, len, cb)
 {
     if (serport == null) {
         return;
@@ -408,48 +490,149 @@ async function serport_writeBinary(payload, len, cb)
     await serport_resetReader();
     if (serport_hasQuery == false)
     {
-        await serport_tx(serport_genInitQuery(), async function () { // sent query
-
-            var tmp = await serport_readToEnd();
-            if (tmp == null || tmp.length < 9) {
-                debug_textbox.value += "ESC failed to reply to initial query\r\n";
-                if (tmp != null && tmp.length > 0) {
-                    debug_textbox.value += "reply: ";
-                    var mismatched = 0;
-                    for (var i = 0; i < tmp.length; i++) {
-                        debug_textbox.value += toHexString(tmp[i]) + " ";
-                        if (i >= device_id.length) {
-                            mismatched += 1;
-                        }
-                        else if (tmp[i] != device_id[i]) {
-                            mismatched += 1;
-                        }
-                    }
-                    debug_textbox.value += "\r\n";
-                    if (mismatched >= 2) {
-                        debug_textbox.value += "warning: device identifier might be wrong\r\n";
-                    }
-                }
-                return;
-            }
-
-            debug_textbox.value += "ESC query reply: ";
-            for (var i = 0; i < serport_fifo.length; i++) {
-                debug_textbox.value += toHexString(serport_fifo[i]) + " ";
-            }
-            debug_textbox.value += "\r\n";
-
-            serport_hasQuery = true;
-
-            await serport_writeBinaryInner(payload, len, cb);
-        }); // sent query
+        await serport_issueInitQuery( async function () {
+            await serport_writeBinaryInner(payload, start_addr, len, cb);
+        });
     }
     else
     {
-        await serport_writeBinaryInner(payload, len, cb);
+        await serport_writeBinaryInner(payload, start_addr, len, cb);
     }
 }
 
+var serport_fwChunks = [];
+var serport_fwChunksVerify = [];
+var serport_fwVerifyMe = null
+var serport_fwIdx = 0;
+var serport_fwCb = null;
+var serport_fwVerified = false;
+
+async function serport_writeFirmwareChunk()
+{
+    if (serport_fwChunks.length <= 0) {
+        debug_textbox.value += "finished writing all FW chunks\r\n";
+        serport_fwIdx = flash_fw_start;
+        serport_verifyFirmwareChunk();
+        return;
+    }
+
+    var nextChunk = serport_fwChunks[0];
+    serport_fwChunksVerify.push(nextChunk);
+    await serport_writeBinaryInner(nextChunk, serport_fwIdx, nextChunk.length, async function() {
+        await serport_writeFirmwareChunk();
+    });
+    serport_fwIdx += nextChunk.length;
+    serport_fwChunks = serport_fwChunks.slice(1);
+}
+
+async function serport_verifyFirmwareChunk()
+{
+    if (serport_fwChunksVerify.length <= 0) {
+        if (serport_fwCb) {
+            serport_fwCb(serport_fwVerified);
+        }
+        return;
+    }
+    serport_fwVerifyMe = serport_fwChunksVerify[0];
+    await serport_readMemoryChunk(serport_fwIdx, serport_fwVerifyMe.length, async function(data) {
+        var all_match = true;
+        for (var i = 0; i < serport_fwVerifyMe.length; i++) {
+            if (data[i] != serport_fwVerifyMe[i]) {
+                debug_textbox.value += "FW verification failed at 0x" + toHexString(serport_fwIdx - serport_fwVerifyMe.length + i) + ", 0x" + toHexString(serport_fwVerifyMe[i]) + " != 0x" + toHexString(data[i]) + "\r\n";
+                all_match = false;
+            }
+        }
+        if (all_match == false) {
+            serport_fwVerified = false;
+        }
+        await serport_verifyFirmwareChunk();
+    });
+    serport_fwIdx += serport_fwVerifyMe.length;
+    serport_fwChunksVerify = serport_fwChunksVerify.slice(1);
+}
+
+async function serport_readFirmwareChunk()
+{
+    const total_len = eeprom_offset + eeprom_total_length;
+    if (serport_fwChunks.length >= total_len) {
+        if (serport_fwCb) {
+            serport_fwCb(serport_fwChunks);
+        }
+        return;
+    }
+
+    var chunkLen = total_len - serport_fwIdx;
+    if (chunkLen > 0x80) {
+        chunkLen = 0x80;
+    }
+
+    await serport_readMemoryChunk(serport_fwIdx, chunkLen, async function(data) {
+        serport_fwChunks = uint8ArrayMerge(serport_fwChunks, data);
+        serport_fwIdx += data.length;
+
+        await serport_readFirmwareChunk();
+    });
+}
+
+async function serport_writeFirmwareInner(payload, len, cb)
+{
+    serport_fwVerified = true;
+    serport_fwCb = cb;
+    serport_fwChunks = [];
+    serport_fwChunksVerify = [];
+    var i;
+    for (i = 0; i < len; )
+    {
+        var chunkLen = len - i;
+        if (chunkLen > 0x80) {
+            chunkLen = 0x80;
+        }
+        var chunk = payload.slice(i, i + chunkLen);
+        serport_fwChunks.push(chunk);
+        i += chunkLen;
+    }
+    serport_fwIdx = flash_fw_start;
+    await serport_writeFirmwareChunk();
+}
+
+async function serport_writeFirmware(payload, len, cb)
+{
+    if (serport == null) {
+        return;
+    }
+    await serport_resetReader();
+    if (serport_hasQuery == false)
+    {
+        await serport_issueInitQuery( async function () {
+            await serport_writeFirmwareInner(payload, len, cb);
+        });
+    }
+    else
+    {
+        await serport_writeFirmwareInner(payload, len, cb);
+    }
+}
+
+async function serport_readFirmware(cb)
+{
+    if (serport == null) {
+        return;
+    }
+    serport_fwCb = cb;
+    serport_fwChunks = new Uint8Array();
+    serport_fwIdx = 0;
+    await serport_resetReader();
+    if (serport_hasQuery == false)
+    {
+        await serport_issueInitQuery( async function () {
+            await serport_readFirmwareChunk(cb);
+        });
+    }
+    else
+    {
+        await serport_readFirmwareChunk(cb);
+    }
+}
 
 function serport_genSetAddressCmd(adr)
 {

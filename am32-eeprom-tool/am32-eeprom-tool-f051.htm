@@ -5,6 +5,7 @@
 
 <script src="am32-webscripts.js" type="text/javascript"></script>
 <script src="am32-webscripts-serialport.js" type="text/javascript"></script>
+<script src="intel-hex.js" type="text/javascript"></script>
 
 <script type="text/javascript">
 
@@ -52,13 +53,16 @@ var eeprom_offset = 0x7C00;
 var eeprom_useful_length = 0x30;
 var eeprom_total_length = 0xB0; // 176
 var device_id = [0x34, 0x37, 0x31, 0x02, 0x1F, 0x06, 0x06, 0x01, 0x30, ];
+var flash_start = 0x08000000;
+var flash_fw_start = 0x1000;
 
 var saveByteArray; // this is a function
 
 function onload()
 {
     debug_textbox = document.getElementById("txt_debug");
-    document.getElementById("file-input").addEventListener("change", readBinFile, false);
+    document.getElementById("btn_readbinfile").addEventListener("change", readBinFile, false);
+    document.getElementById("btn_fwupdate").addEventListener("change", serport_fwupdate, false);
     document.getElementById("tbl_checkboxes").innerHTML = make_all_checkboxes();
     document.getElementById("tbl_sliders").innerHTML    = make_all_sliders();
 
@@ -94,6 +98,15 @@ function onload()
 var debug_textbox;
 
 </script>
+
+<style>
+fieldset
+{
+    margin-top:    3pt;
+    margin-bottom: 3pt;
+}
+</style>
+
 </head>
 <body onload="onload()">
 
@@ -104,7 +117,7 @@ var debug_textbox;
         <div style="display: table-row;">
             <div style="display: table-cell; width: 50%;">
                 <fieldset><legend>Open *.BIN File</legend>
-                    <input type="file" id="file-input" />
+                    <input type="file" id="btn_readbinfile" />
                 </fieldset>
             </div>
             <div style="display: table-cell;">
@@ -170,6 +183,9 @@ var debug_textbox;
 <div id="div_serialport_download" style="display: none;">
 Unfortunately, the online version of this tool does not support serial port connections properly. To work around this, please download an offline copy of this page, using the "save as complete webpage" function of your web browser.
 </div>
+</fieldset>
+<fieldset style="display: none;"><legend>FW Update (*.hex file)</legend>
+<input type="file" id="btn_fwupdate" />&nbsp;&nbsp;&nbsp;<input type="button" id="btn_fwdump" value="Dump FW to *.bin" onclick="serport_fwdump()" />
 </fieldset>
 <fieldset><legend>About</legend>
 This is a tool to edit the EEPROM of a ESC running <a href="https://github.com/AlkaMotors/AM32-MultiRotor-ESC-firmware" target="_blank">AM32 firmware</a>. This tool is written with a combination of HTML, JavaScript, and WebSerial, which means it can be used both online and offline without any installation. It is completely free and open source, you can download an offline copy of this tool by simply clicking "save as complete webpage" in your web browser, or obtain it from its <a href="https://github.com/frank26080115/AM32-FW-Helpers" target="_blank">GitHub repo here</a>.
