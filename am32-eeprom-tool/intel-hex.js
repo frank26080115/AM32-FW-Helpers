@@ -620,6 +620,34 @@ class MemoryMap {
 
 
     /**
+     * Returns the minimum and maximum address contained in the map
+     *
+     * @return a two item list, with the minimum and maximum address
+     */
+    getRange() {
+        const keys = Array.from(this.keys());
+        var minAddr = -1;
+        var maxAddr = 0;
+        var arr = null;
+
+        for (let i=0,l=keys.length; i<l; i++)
+        {
+            const blockAddr = keys[i];
+            const block = this.get(blockAddr);
+            const blockLength = block.length;
+            const blockEnd = blockAddr + blockLength;
+            if (blockEnd > maxAddr) {
+                maxAddr = blockEnd;
+            }
+            if (blockAddr < minAddr || minAddr < 0) {
+                minAddr = blockAddr;
+            }
+        }
+        return [minAddr, maxAddr];
+    }
+
+
+    /**
      * Returns a <tt>String</tt> of text representing a .hex file.
      * <br/>
      * The writer has an opinionated behaviour. Check the project's

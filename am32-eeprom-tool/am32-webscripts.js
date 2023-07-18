@@ -117,6 +117,7 @@ function readBinFile(e)
         var barr = new Uint8Array(e.target.result);
         readBin(barr);
         debug_textbox.value += "Local binary file loaded\r\n";
+        document.getElementById("btn_readbinfile").value = "";
     };
     reader.readAsArrayBuffer(file);
 }
@@ -304,7 +305,7 @@ function uint8ArrayMerge(x, y)
     {
         var mergedArray = new Uint8Array(x.length + y.length);
         mergedArray.set(x);
-        for (var i = 0, j = y.length; i < y.length && j < mergedArray.length; i++, j++) {
+        for (var i = 0, j = x.length; i < y.length && j < mergedArray.length; i++, j++) {
             mergedArray[j] = y[i];
         }
         x = mergedArray; 
@@ -314,26 +315,40 @@ function uint8ArrayMerge(x, y)
 
 function serport_buttonsSetDisabled(disabled)
 {
-    document.getElementById("btn_serread" ).disabled   = disabled;
-    document.getElementById("btn_serwrite").disabled   = disabled;
-    document.getElementById("btn_sererase").disabled   = disabled;
+    document.getElementById("btn_serread"   ).disabled = disabled;
+    document.getElementById("btn_serwrite"  ).disabled = disabled;
+    document.getElementById("btn_sererase"  ).disabled = disabled;
     document.getElementById("btn_serrefresh").disabled = disabled;
-    document.getElementById("btn_serrunapp").disabled  = disabled;
-    document.getElementById("btn_fwupdate").disabled  = disabled;
-    document.getElementById("btn_fwdump").disabled  = disabled;
+    document.getElementById("btn_serrunapp" ).disabled = disabled;
+    document.getElementById("btn_fwupdate"  ).disabled = disabled;
+    document.getElementById("btn_fwdump"    ).disabled = disabled;
+}
+
+function serport_buttonsSetCurrent()
+{
+    document.getElementById("div_progress").style.display = "none";
+    if (serport == null) {
+        serport_buttonsSetDisabled(true);
+    }
+    else {
+        serport_buttonsSetDisabled(false);
+    }
 }
 
 function serport_btnRead()
 {
+    serport_buttonsSetDisabled(true);
     debug_textbox.value = "";
     serport_readBinary(function(barr) {
         readBin(barr);
         debug_textbox.value += "EEPROM data read from ESC\r\n";
+        serport_buttonsSetCurrent();
     });
 }
 
 function serport_writeAndVerify(barr_sent, message)
 {
+    serport_buttonsSetDisabled(true);
     debug_textbox.value = "";
     serport_writeBinary(barr_sent, eeprom_offset, eeprom_useful_length, function() {
         serport_readBinary(function(barr_read) {
@@ -352,6 +367,7 @@ function serport_writeAndVerify(barr_sent, message)
                 }
             }
             debug_textbox.value += message + "\r\n";
+            serport_buttonsSetCurrent();
         });
     });
 }
@@ -378,13 +394,14 @@ function serport_btnRefresh()
 
 function serport_btnRunApp()
 {
-    serport_tx(serport_genRunCmd(), async function () {
+    serport_tx(serport_genRunCmd(), 0, async function (data) {
         debug_textbox.value += "ESC may have rebooted\r\n";
     });
 }
 
 function serport_fwupdate(e)
 {
+    serport_buttonsSetDisabled(true);
     debug_textbox.value = "";
     var file = e.target.files[0];
     if (!file) {
@@ -393,8 +410,14 @@ function serport_fwupdate(e)
     var reader = new FileReader();
     reader.onload = function(e) {
         try {
+            document.getElementById("div_progress").style.display = "block";
+            document.getElementById("txt_progress").innerHTML = "preparing file...";
             let memMap = MemoryMap.fromHex(e.target.result);
-            let fwArr = memMap.slicePad(flash_start + flash_fw_start, eeprom_offset - flash_fw_start);
+            var start_addr = flash_start + flash_fw_start;
+            var total_len = eeprom_offset - flash_fw_start;
+            var end_addr = start_addr + total_len;
+            let fwArr = memMap.slicePad(start_addr, total_len);
+            debug_textbox.value += "writing from " + toHexString(start_addr) + " , len = " + toHexString(total_len) + " (" + total_len + ") , ending at " + toHexString(end_addr) + "\r\n";
             serport_writeFirmware(fwArr, fwArr.length, function(good) {
                 if (good) {
                     debug_textbox.value += "finished verifying all FW chunks\r\n";
@@ -402,11 +425,13 @@ function serport_fwupdate(e)
                 else {
                     debug_textbox.value += "finished attempting to verify FW, has failures\r\n";
                 }
+                serport_buttonsSetCurrent();
             });
         }
         catch (ex) {
             debug_textbox.value += "error: exception while reading/sending firmware: " + ex.toString();
         }
+        document.getElementById("btn_fwupdate").value = "";
     };
     reader.readAsText(file);
 }
@@ -418,9 +443,13 @@ function serport_fwdump()
         return;
     }
     fname = getBinFileName(fname, "am32-fw.bin");
+    serport_buttonsSetDisabled(true);
+    document.getElementById("div_progress").style.display = "block";
+    document.getElementById("txt_progress").innerHTML = "";
     debug_textbox.value = "";
     serport_readFirmware(function(data) {
         debug_textbox.value += "finished reading FW bin\r\n";
         saveByteArray(data, fname);
+        serport_buttonsSetCurrent();
     });
 }
