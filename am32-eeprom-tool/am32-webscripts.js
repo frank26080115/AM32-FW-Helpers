@@ -339,7 +339,7 @@ function serport_btnRead()
 {
     serport_buttonsSetDisabled(true);
     debug_textbox.value = "";
-    serport_readBinary(function(barr) {
+    serport_readEeprom(function(barr) {
         readBin(barr);
         debug_textbox.value += "EEPROM data read from ESC\r\n";
         serport_buttonsSetCurrent();
@@ -351,7 +351,7 @@ function serport_writeAndVerify(barr_sent, message)
     serport_buttonsSetDisabled(true);
     debug_textbox.value = "";
     serport_writeBinary(barr_sent, eeprom_offset, eeprom_useful_length, function() {
-        serport_readBinary(function(barr_read) {
+        serport_readEeprom(function(barr_read) {
             if (barr_read.length < 
             //barr_sent.length
             eeprom_useful_length

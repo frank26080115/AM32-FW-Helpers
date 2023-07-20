@@ -7,7 +7,9 @@ const ack_byte = 0x30;
 var serport_fifo = null;
 var serport_echocnt = 0;
 var serport_hasQuery = false;
-var serport_timeout = 300;
+var serport_timeout = 500;
+const serport_timeout_default = 2000;
+const serport_startwait_default = 40;
 
 async function serport_connect()
 {
@@ -109,7 +111,7 @@ async function serport_resetReader()
     serport_fifo = null;
 }
 
-async function serport_tx(data, expect, cb, start_wait=100, total_wait=300)
+async function serport_tx(data, expect, cb, start_wait=serport_startwait_default, total_wait=serport_timeout_default)
 {
     if (serport == null) {
         return;
@@ -182,7 +184,7 @@ async function serport_txWait(data, expect, cb)
         {
             let { value, done } = await Promise.race([
                 serport_reader.read(),
-                new Promise((_, reject) => setTimeout(reject, 50, new Error("serport_txWait read timeout")))
+                new Promise((_, reject) => setTimeout(reject, 5, new Error("serport_txWait read timeout")))
                 ]);
             if (value != null)
             {
@@ -191,6 +193,7 @@ async function serport_txWait(data, expect, cb)
                     console.log("serport read a bit");
                     console.log(value);
                     serport_fifoPush(value);
+                    serport_lastTime = Date.now();
                 }
             }
         }
@@ -202,10 +205,10 @@ async function serport_txWait(data, expect, cb)
 
     setTimeout(async function () {
         await serport_txWait(data, expect, cb);
-    }, 50);
+    }, 5);
 }
 
-async function serport_readBinaryInner(proc_cb)
+async function serport_readEepromInner(proc_cb)
 {
     await serport_resetReader();
     await serport_tx(serport_genSetAddressCmd(eeprom_offset), 1
@@ -287,20 +290,33 @@ async function serport_readBinaryInner(proc_cb)
                         }
                     }
                     proc_cb(buffer8);
-                }, 100, 1000); // sent read
+                }, 40, 2000); // sent read
             }); // sent set address
-        }, 100, 1000); // sent read
+        }, 40, 2000); // sent read
     }); // sent set address
 }
 
+var serport_readMemoryRetries;
+
 async function serport_readMemoryChunk(start_addr, len, proc_cb)
 {
+    if (serport_readMemoryRetries <= 0)
+    {
+        serport_buttonsSetCurrent();
+        return;
+    }
+    serport_readMemoryRetries -= 1;
+
     await serport_resetReader();
     await serport_tx(serport_genSetAddressCmd(start_addr), 1, async function (data) { // sent set address
 
         if (data == null || data == false || data.length < 1 || data[0] != ack_byte) {
-            debug_textbox.value += "ESC failed to ack address set command\r\n";
-            serport_buttonsSetCurrent();
+            debug_textbox.value += "ESC failed to ack address set command";
+            if (serport_readMemoryRetries > 0) {
+                debug_textbox.value += ", retrying...";
+            }
+            debug_textbox.value += "\r\n";
+            serport_readMemoryChunk(start_addr, len, proc_cb);
             return;
         }
 
@@ -308,20 +324,28 @@ async function serport_readMemoryChunk(start_addr, len, proc_cb)
         await serport_tx(serport_genReadCmd(len), len + 3, async function (data) { // sent read
 
             if (data == null || data == false) {
-                debug_textbox.value += "ESC failed to reply data packet\r\n";
-                serport_buttonsSetCurrent();
+                debug_textbox.value += "ESC failed to reply data packet";
+                if (serport_readMemoryRetries > 0) {
+                    debug_textbox.value += ", retrying...";
+                }
+                debug_textbox.value += "\r\n";
+                serport_readMemoryChunk(start_addr, len, proc_cb);
                 return;
             }
             else if (data.length < len) {
-                debug_textbox.value += "ESC failed to reply data packet (too short, " + data.length + " bytes)\r\n";
-                serport_buttonsSetCurrent();
+                debug_textbox.value += "ESC failed to reply data packet (too short, " + data.length + " bytes)";
+                if (serport_readMemoryRetries > 0) {
+                    debug_textbox.value += ", retrying...";
+                }
+                debug_textbox.value += "\r\n";
+                serport_readMemoryChunk(start_addr, len, proc_cb);
                 return;
             }
 
             if (proc_cb) {
                 proc_cb(data);
             }
-        }, 100, 1000); // sent read
+        }, 40, 2000); // sent read
     }); // sent set address
 }
 
@@ -371,7 +395,7 @@ async function serport_issueInitQuery(proc_cb)
     }); // sent query
 }
 
-async function serport_readBinary(proc_cb)
+async function serport_readEeprom(proc_cb)
 {
     if (serport == null) {
         return;
@@ -380,29 +404,109 @@ async function serport_readBinary(proc_cb)
     if (serport_hasQuery == false)
     {
         await serport_issueInitQuery( async function () {
-            await serport_readBinaryInner(proc_cb);
+            await serport_readEepromInner(proc_cb);
         });
     }
     else
     {
-        await serport_readBinaryInner(proc_cb);
+        await serport_readEepromInner(proc_cb);
     }
+}
+
+var serport_writeRetry;
+var serport_payloadRetry;
+
+async function serport_writePayload(payload, start_addr, len, cb)
+{
+    if (serport_payloadRetry <= 0) {
+        serport_buttonsSetCurrent();
+        return;
+    }
+    serport_payloadRetry -= 1;
+
+    await serport_resetReader();
+    await serport_tx(serport_genPayload(payload, 0x00, len), 1
+        , async function (data) { // sent payload
+
+        if (data == null || data == false || data.length < 1) {
+            debug_textbox.value += "ESC failed to ack payload";
+            if (serport_writeRetry > 0) {
+                debug_textbox.value += ", retrying...";
+            }
+            debug_textbox.value += "\r\n";
+            await serport_writeBinaryInner(payload, start_addr, len, cb);
+            return;
+        }
+        else if (data[0] != ack_byte) {
+            debug_textbox.value += "ESC failed to ack payload (" + toHexString(data[0]) + " @ " + toHexString(start_addr) + ")";
+            if (serport_payloadRetry > 0) {
+                debug_textbox.value += ", retrying...";
+            }
+            debug_textbox.value += "\r\n";
+            await serport_writePayload(payload, start_addr, len, cb);
+            return;
+        }
+
+        await serport_resetReader();
+        await serport_tx(serport_genFlashCmd(), 1
+            , async function (data) { // sent flash command
+
+            if (data == null || data == false || data.length < 1) {
+                debug_textbox.value += "ESC failed to ack flash command";
+                if (serport_writeRetry > 0) {
+                    debug_textbox.value += ", retrying...";
+                }
+                debug_textbox.value += "\r\n";
+                await serport_writeBinaryInner(payload, start_addr, len, cb);
+                return;
+            }
+            else if (data[0] != ack_byte) {
+                debug_textbox.value += "ESC failed to ack flash command (" + toHexString(data[0]) + ")";
+                if (serport_writeRetry > 0) {
+                    debug_textbox.value += ", retrying...";
+                }
+                debug_textbox.value += "\r\n";
+                await serport_writeBinaryInner(payload, start_addr, len, cb);
+                return;
+            }
+
+            if (cb) {
+                cb();
+            }
+
+        }, 40, 2000); // sent flash command
+    }, 40, 2000); // sent payload
 }
 
 async function serport_writeBinaryInner(payload, start_addr, len, cb)
 {
+    if (serport_writeRetry <= 0) {
+        serport_buttonsSetCurrent();
+        return;
+    }
+    serport_writeRetry -= 1;
+
+    serport_payloadRetry = 3;
     await serport_resetReader();
     await serport_tx(serport_genSetAddressCmd(start_addr), 1
         , async function (data) { // sent set address
 
         if (data == null || data == false || data.length < 1 || data[0] != ack_byte) {
-            debug_textbox.value += "ESC failed to ack address set command\r\n";
-            serport_buttonsSetCurrent();
+            debug_textbox.value += "ESC failed to ack address set command";
+            if (serport_writeRetry > 0) {
+                debug_textbox.value += ", retrying...";
+            }
+            debug_textbox.value += "\r\n";
+            await serport_writeBinaryInner(payload, start_addr, len, cb);
             return;
         }
         else if (data[0] != ack_byte) {
-            debug_textbox.value += "ESC failed to ack address set command (" + toHexString(data[0]) + ")\r\n";
-            serport_buttonsSetCurrent();
+            debug_textbox.value += "ESC failed to ack address set command (" + toHexString(data[0]) + ")";
+            if (serport_writeRetry > 0) {
+                debug_textbox.value += ", retrying...";
+            }
+            debug_textbox.value += "\r\n";
+            await serport_writeBinaryInner(payload, start_addr, len, cb);
             return;
         }
 
@@ -411,42 +515,7 @@ async function serport_writeBinaryInner(payload, start_addr, len, cb)
             , async function (data) { // sent set buffer
             // ESC does not reply to this
 
-            await serport_resetReader();
-            await serport_tx(serport_genPayload(payload, 0x00, len), 1
-                , async function (data) { // sent payload
-
-                if (data == null || data == false || data.length < 1) {
-                    debug_textbox.value += "ESC failed to ack payload\r\n";
-                    serport_buttonsSetCurrent();
-                    return;
-                }
-                else if (data[0] != ack_byte) {
-                    debug_textbox.value += "ESC failed to ack payload (" + toHexString(data[0]) + " @ " + toHexString(start_addr) + ")\r\n";
-                    serport_buttonsSetCurrent();
-                    return;
-                }
-
-                await serport_resetReader();
-                await serport_tx(serport_genFlashCmd(), 1
-                    , async function (data) { // sent flash command
-
-                    if (data == null || data == false || data.length < 1) {
-                        debug_textbox.value += "ESC failed to ack flash command\r\n";
-                        serport_buttonsSetCurrent();
-                        return;
-                    }
-                    else if (data[0] != ack_byte) {
-                        debug_textbox.value += "ESC failed to ack flash command (" + toHexString(data[0]) + ")\r\n";
-                        serport_buttonsSetCurrent();
-                        return;
-                    }
-
-                    if (cb) {
-                        cb();
-                    }
-
-                }, 100, 1000); // sent flash command
-            }, 100, 1000); // sent payload
+            await serport_writePayload(payload, start_addr, len, cb);
         }); // sent set buffer
     }); // sent set address
 }
@@ -456,6 +525,7 @@ async function serport_writeBinary(payload, start_addr, len, cb)
     if (serport == null) {
         return;
     }
+    serport_writeRetry = 3;
     await serport_resetReader();
     if (serport_hasQuery == false)
     {
@@ -479,7 +549,7 @@ var serport_fwVerified = false;
 async function serport_writeFirmwareChunk()
 {
     if (serport_fwChunks.length <= 0) {
-        debug_textbox.value += "finished writing all FW chunks\r\n";
+        debug_textbox.value += "finished writing all FW chunks, starting verification...\r\n";
         serport_fwIdx = flash_fw_start;
         serport_verifyFirmwareChunk();
         return;
@@ -506,6 +576,7 @@ async function serport_verifyFirmwareChunk()
 
     document.getElementById("txt_progress").innerHTML = serport_fwChunksVerify.length + " chunks left to verify";
     serport_fwVerifyMe = serport_fwChunksVerify[0];
+    serport_readMemoryRetries = 3;
     await serport_readMemoryChunk(serport_fwIdx, serport_fwVerifyMe.length, async function(data) {
         var all_match = true;
         for (var i = 0; i < serport_fwVerifyMe.length; i++) {
@@ -541,6 +612,7 @@ async function serport_readFirmwareChunk()
         chunkLen = 0x80;
     }
 
+    serport_readMemoryRetries = 3;
     await serport_readMemoryChunk(serport_fwIdx, chunkLen, async function(data) {
         serport_fwChunks = uint8ArrayMerge(serport_fwChunks, data);
         serport_fwIdx += data.length;
@@ -559,8 +631,8 @@ async function serport_writeFirmwareInner(payload, len, cb)
     for (i = 0; i < len; )
     {
         var chunkLen = len - i;
-        if (chunkLen > 0x38) {
-            chunkLen = 0x38;
+        if (chunkLen > (64-16)) {
+            chunkLen = (64-16);
         }
         var chunk = payload.slice(i, i + chunkLen);
         serport_fwChunks.push(chunk);
@@ -695,6 +767,7 @@ function serport_genCrc(barr)
 {
     var crc16 = new Uint16Array(1);
     var xb = new Uint8Array(1);
+    crc16[0] = 0;
     for (var i = 0; i < barr.length; i++)
     {
         xb[0] = barr[i] & 0xFF;
@@ -702,14 +775,12 @@ function serport_genCrc(barr)
         {
             if (((xb[0] & 0x01) ^ (crc16[0] & 0x0001)) != 0) {
                 crc16[0] = (crc16[0] >> 1) & 0xFFFF;
-                //crc16[0] = (crc16[0] & 0x7FFF);
                 crc16[0] = (crc16[0] ^ 0xA001) & 0xFFFF;
             }
             else {
                 crc16[0] = (crc16[0] >> 1) & 0xFFFF;
             }
             xb[0] = (xb[0] >> 1) & 0xFF;
-            console.log(xb[0] + " " + crc16[0]);
         }
     }
     return crc16[0] & 0xFFFF;
