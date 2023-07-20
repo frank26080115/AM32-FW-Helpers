@@ -12,8 +12,14 @@ Helpful tools for AM32 firmware
  * am32-eeprom-tools
    * used to edit the EEPROM of a ESC running AM32
    * able to load and save from file
-   * able to upload and download from the ESC through serial port
+   * able to upload and download EEPROM data from the ESC through serial port
    * Webpage app (HTML and JavaScript), can be used offline as well as online
  * am32-hw-analyzer
    * STM32 firmware that can help figure out the pin mappings of an ESC that has not yet been confirmed to be supported by AM32
    * Arduino sketch
+ * am32-fw-updater
+   * write firmware hex file into ESC through the serial port bootloader
+   * Python script
+ * am32-fw-dumper
+   * dump firmware bin file from ESC through the serial port bootloader
+   * Python script, found inside the am32-fw-updater directory

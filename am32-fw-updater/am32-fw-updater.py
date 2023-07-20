@@ -1,0 +1,276 @@
+import argparse
+import os, time
+from intelhex import IntelHex
+import serial
+from serial.tools.list_ports import comports
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("firmware",                                                       type=str, help="firmware file")
+    parser.add_argument("serialport",                               default="auto",       type=str, help="serial port name")
+    parser.add_argument("-a", "--fwaddr",     metavar="fwaddr",     default="0x08001000", type=str, help="firmware start address")
+    parser.add_argument("-e", "--eepromaddr", metavar="eepromaddr", default="0x7C00",     type=str, help="eeprom address")
+    parser.add_argument("-c", "--chunksize",  metavar="chunksize",  default="128",        type=str, help="chunk size")
+    parser.add_argument("-v", "--verbose",                          action="store_true",            help="verbose")
+    args = parser.parse_args()
+
+    port_name = args.serialport
+    if port_name == "auto" or args.verbose:
+        ports = get_all_comports(args.verbose)
+        if port_name == "auto":
+            if len(ports) > 0:
+                port_name = ports[0]
+            else:
+                print("no serial ports available")
+                quit()
+
+    fw_fullpath = os.path.abspath(args.firmware)
+    fw_basename = os.path.basename(fw_fullpath)
+    fw_namesplit = os.path.splitext(fw_basename)
+    fw_justname = fw_namesplit[0].strip()
+    fw_ext = fw_namesplit[1].strip().lower()
+    if args.verbose:
+        print("firmware:")
+        print("\t" + fw_fullpath)
+        print("\t%s (%s)" % (fw_basename, fw_ext))
+
+    if fw_ext != ".hex":
+        raise Exception("unknown firmware file type, must be *.hex")
+
+    fw_ihex = IntelHex(fw_fullpath)
+    if args.verbose:
+        print("\tfrom 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
+
+    if "0x" in args.fwaddr.lower():
+        fwaddr = int(args.fwaddr, 16)
+    else:
+        try:
+            fwaddr = int(args.fwaddr, 10)
+        except:
+            fwaddr = int(args.fwaddr, 16)
+    if args.verbose:
+        print("\tstart addr 0x%04X" % (fwaddr))
+
+    fw_binarr = fw_ihex.tobinarray(start = fwaddr)
+
+    if "0x" in args.eepromaddr.lower():
+        eep_addr = int(args.eepromaddr, 16)
+    else:
+        try:
+            eep_addr = int(args.eepromaddr, 10)
+        except:
+            eep_addr = int(args.eepromaddr, 16)
+
+    if args.verbose:
+        print("EEPROM address = 0x%04X" % (eep_addr))
+
+    fw_binarr = fw_binarr[:eep_addr - (fwaddr & 0xFFFF)]
+
+    if "0x" in args.chunksize.lower():
+        chunksize = int(args.chunksize, 16)
+    else:
+        try:
+            chunksize = int(args.chunksize, 10)
+        except:
+            chunksize = int(args.chunksize, 16)
+
+    if (chunksize % 16) != 0:
+        raise Exception("chunk size invalid, must be a multiple of 16")
+    if chunksize > 256 or chunksize < 16:
+        raise Exception("chunk size invalid, out of range (16 to 256)")
+    if (1024 % chunksize) != 0:
+        raise Exception("chunk size invalid, must reach page boundaries")
+
+    if args.verbose:
+        print("chunk size = %u" % (chunksize))
+
+    ser = serial.serial_for_url(port_name, do_not_open=True)
+    ser.baudrate = 19200
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity   = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+    ser.timeout  = 1
+
+    try:
+        ser.open()
+        if args.verbose:
+            print("serial port opened")
+    except serial.SerialException as e:
+        print('Could not open serial port {}: {}\n'.format(ser.name, e))
+        quit()
+
+    i = 0
+    j = fwaddr & 0xFFFF
+    done = False
+    while i < len(fw_binarr) and done == False:
+        thischunk = chunksize
+        if (i + thischunk) >= len(fw_binarr):
+            thischunk = len(fw_binarr) - i
+            done = True
+        barr = fw_binarr[i:i + thischunk]
+
+        if i != 0:
+            print("\r", end="")
+        print("writing to 0x%04X    " % j, end="")
+
+        send_setaddress(ser, j)
+        send_setbuffer(ser, j, thischunk)
+        send_payload(ser, j, barr)
+        send_flash(ser, j)
+        i += thischunk
+        j += thischunk
+
+    print("\rfinished all writes, begin verification...")
+
+    i = 0
+    j = fwaddr & 0xFFFF
+    done = False
+    while i < len(fw_binarr) and done == False:
+        thischunk = chunksize
+        if (i + thischunk) >= len(fw_binarr):
+            thischunk = len(fw_binarr) - i
+            done = True
+        barr = fw_binarr[i:i + thischunk]
+
+        if i != 0:
+            print("\r", end="")
+        print("verifying 0x%04X    " % j, end="")
+
+        tries = 3
+        while tries > 0:
+            send_setaddress(ser, j)
+            data = send_readcmd(ser, j, thischunk)
+            if len(barr) != len(data):
+                raise Exception("verification read length at 0x%04X does not match, %u != %u" % (j, len(barr), len(data)))
+            wcrc = crc16(barr)
+            rcrc = crc16(data)
+            tries -= 1
+            if wcrc == rcrc:
+                break
+            if wcrc != rcrc and tries <= 0:
+                raise Exception("verification read contents at 0x%04X does not match,\r\n\tdata %s\r\n\tread %s\r\n" % (j, format_arr(barr), format_arr(data)))
+        i += thischunk
+        j += thischunk
+    print("\rfinished verification, all done")
+
+def get_all_comports(to_print):
+    if to_print:
+        print("COM ports:")
+    ports = []
+    for n, (port, desc, hwid) in enumerate(sorted(comports()), 1):
+        if to_print:
+            print('--- {:2}: {:20} {!r}\n'.format(n, port, desc))
+        ports.append(port)
+    return ports
+
+def crc16(data, length = None):
+    if length is None:
+        length = len(data)
+    crc = 0
+    i = 0
+    while i < length:
+        xb = data[i]
+        j = 0
+        while j < 8:
+            if ((xb & 0x01) ^ (crc & 0x0001)) != 0:
+                crc = (crc >> 1    ) & 0xFFFF
+                crc = (crc ^ 0xA001) & 0xFFFF
+            else:
+                crc = (crc >> 1    ) & 0xFFFF
+            xb = (xb >> 1) & 0xFF
+            j += 1
+        i += 1
+    return crc & 0xFFFF
+
+def append_crc(data):
+    crc = crc16(data)
+    data.append(crc & 0xFF)
+    data.append(((crc & 0xFF00) >> 8) & 0xFF)
+    return data
+
+def send_setaddress(ser, addr):
+    try:
+        x = bytearray([0xFF, 0x00, 0x00, 0x00])
+        x[2] = (addr & 0xFF00) >> 8;
+        x[3] = (addr & 0x00FF) >> 0;
+        x = append_crc(x)
+        ser.write(x)
+        y = ser.read(len(x) + 1)
+        if y[-1] != 0x30:
+            raise Exception("did not get valid ack, 0x%02X" % y[-1])
+    except Exception as ex:
+        print("ERROR during set address command (@ 0x%04X), exception: %s" % (addr, ex))
+        quit()
+
+def send_setbuffer(ser, addr, buflen):
+    try:
+        x = bytearray([0xFE, 0x00, 0, buflen])
+        x = append_crc(x)
+        ser.write(x)
+        y = ser.read(len(x))
+        time.sleep(0.001)
+    except Exception as ex:
+        print("ERROR during set buffer command (@ 0x%04X %u), exception: %s" % (addr, buflen, ex))
+        quit()
+
+def send_payload(ser, addr, x):
+    try:
+        x = append_crc(x)
+        ser.write(x)
+        y = ser.read(len(x) + 1)
+        if y[-1] != 0x30:
+            raise Exception("did not get valid ack, 0x%02X" % y[-1])
+    except Exception as ex:
+        print("ERROR during payload transfer (@ 0x%04X), exception: %s" % (addr, ex))
+        quit()
+
+def send_flash(ser, addr):
+    try:
+        x = bytearray([0x01, 0x01])
+        x = append_crc(x)
+        ser.write(x)
+        y = ser.read(len(x) + 1)
+        if y[-1] != 0x30:
+            raise Exception("did not get valid ack, 0x%02X" % y[-1])
+    except Exception as ex:
+        print("ERROR during flash command (@ 0x%04X), exception: %s" % (addr, ex))
+        quit()
+
+def send_readcmd(ser, addr, buflen):
+    try:
+        x = bytearray([0x03, buflen])
+        x = append_crc(x)
+        ser.write(x)
+        time.sleep(0.01)
+        y = bytearray()
+        expected = len(x) + buflen + 3
+        remaining = expected
+        while len(y) < expected and remaining > 0:
+            z = ser.read(remaining)
+            remaining -= len(z)
+            y.extend(z)
+        if y[-1] != 0x30:
+            raise Exception("did not get valid ack, 0x%02X" % y[-1])
+        y = y[len(x):]
+        data = y[:-3]
+        if len(data) != buflen:
+            raise Exception("length of read data does not match, %u != %u" % (len(data), buflen))
+        #calcedcrc = crc16(data)
+        #rxedcrc = (y[-2] << 8) | y[-3]
+        #if rxedcrc != calcedcrc:
+        #    print("\nWARNING: CRC mismatch @ 0x%04X, rx 0x%04X != calc 0x%04X" % (addr, rxedcrc, calcedcrc))
+        return data
+    except Exception as ex:
+        print("ERROR during read command (@ 0x%04X %u), exception: %s" % (addr, buflen, ex))
+        quit()
+
+def format_arr(data):
+    s = "["
+    for i in data:
+        s += "%02X " % i
+    s = s.strip()
+    s += "]"
+    return s
+
+if __name__ == '__main__':
+    main()
