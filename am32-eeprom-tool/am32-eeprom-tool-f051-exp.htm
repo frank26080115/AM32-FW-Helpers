@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AM32 EEPROM Tool - F051</title>
+
+<script src="am32-webscripts.js" type="text/javascript"></script>
+<script src="am32-webscripts-serialport.js" type="text/javascript"></script>
+<script src="intel-hex.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+
+var all_checkboxes = [
+    // Name                  , def  , byte
+    ["Reverse Rotation",       false, 17, ],
+    ["Complementary PWM",      true , 20, ],
+    ["Variable PWM",           true , 21, ],
+    ["Bi-Directional",         false, 18, ],
+    ["Stuck Rotor Protection", false, 22, ],
+    ["Brake On Stop",          false, 28, ],
+    ["Stall Protection",       false, 29, ],
+    ["Sinusoidal Startup",     false, 19, ],
+    ["Telemetry 30ms",         false, 31, ],
+    ["Use Hall Sensors",       false, 39, ],
+    ["Low Voltage Cutoff",     false, 36, ],
+    ["Double Tap Reverse",     false, 38, ],
+];
+
+var all_sliders = [
+    // Name                  ,  def ,  min ,  max ,   step, offset, byte, readonly
+    ["Bootloader Version"    ,    12,     1,   254,      1,      0,    2, true , ],
+    ["FW Version Major"      ,     0,     0,   255,      1,      0,    3, true , ],
+    ["FW Version Minor"      ,     0,     0,   255,      1,      0,    4, true , ],
+    ["Timing Advance"        ,     2,     0,     3,      1,      0,   23, false, ],
+    ["Motor KV"              ,  2000,    20, 10220,     40,     20,   26, false, ],
+    ["Motor Poles"           ,    14,     0,   255,      1,      0,   27, false, ],
+    ["Startup Power"         ,   100,    50,   150,      1,      0,   25, false, ],
+    ["PWM Frequency"         ,    24,     8,    48,      1,      0,   24, true , ],
+    ["Beep Volume"           ,     7,     0,    10,      1,      0,   30, false, ],
+    ["Stopped Brake Level"   ,    10,     0,    10,      1,      0,   41, false, ],
+    ["Running Brake Level"   ,     9,     0,     9,      1,      0,   42, false, ],
+    ["Sine Startup Range"    ,     5,     5,    25,      1,      0,   40, false, ],
+    ["Sine Mode Power"       ,     5,     0,    10,      1,      0,   45, false, ],
+    ["Servo Low Thresh"      ,  1000,   750,  1500,      2,    750,   32, false, ],
+    ["Servo High Thresh"     ,  2000,  1750,  2260,      2,   1750,   33, false, ],
+    ["Servo Neutral"         ,  1500,  1374,  1629,      1,   1374,   34, false, ],
+    ["Servo Dead Band"       ,     0,     0,   255,      1,      0,   35, false, ],
+    ["Low Voltage Cutoff"    ,   330,   250,   505,      1,    250,   37, false, ],
+    ["Temperature Limit C"   ,   255,     0,   255,      1,      0,   43, false, ],
+    ["Current Limit Amps"    ,     0,     0,   202,      2,      0,   44, false, ],
+    ["Ramp Up"               ,     0,     0,   255,      1,      0, 0x40, false, ],
+    ["Ramp Down"             ,     0,     0,   255,      1,      0, 0x41, false, ],
+];
+
+var eeprom_offset = 0x7C00;
+var eeprom_useful_length = 0x30;
+var eeprom_total_length = 0xB0; // 176
+var device_id = [0x34, 0x37, 0x31, 0x02, 0x1F, 0x06, 0x06, 0x01, 0x30, ];
+var flash_start = 0x08000000;
+var flash_fw_start = 0x1000;
+
+var saveByteArray; // this is a function
+
+function onload()
+{
+    debug_textbox = document.getElementById("txt_debug");
+    document.getElementById("btn_readbinfile").addEventListener("change", readBinFile, false);
+    document.getElementById("btn_fwupdate").addEventListener("change", serport_fwupdate, false);
+    document.getElementById("tbl_checkboxes").innerHTML = make_all_checkboxes();
+    document.getElementById("tbl_sliders").innerHTML    = make_all_sliders();
+
+    saveByteArray = (function () {
+        var a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+        return function (data, name) {
+            var blob = new Blob([data], {type: "octet/stream"});
+            var url = window.URL.createObjectURL(blob);
+            a.href = url;
+            a.download = name;
+            a.click();
+            window.URL.revokeObjectURL(url);
+            debug_textbox.value += "Local binary file saved\r\n";
+        };
+    }());
+
+    if ("serial" in navigator)
+    {
+        serport_buttonsSetDisabled(true);
+        if (window.location.protocol.startsWith("http")) {
+            document.getElementById("div_serialport").style.display = "none";
+            document.getElementById("div_serialport_download").style.display = "block";
+            document.getElementById("fld_fwupdate").style.display = "none";
+        }
+    }
+    else
+    {
+        document.getElementById("div_serialport").innerHTML = "WebSerial is not supported by your browser";
+        document.getElementById("fld_fwupdate").style.display = "none";
+    }
+}
+
+var debug_textbox;
+
+</script>
+
+<style>
+fieldset
+{
+    margin-top:    3pt;
+    margin-bottom: 3pt;
+}
+</style>
+
+</head>
+<body onload="onload()">
+
+<h1>AM32 EEPROM Tool - F051</h1>
+
+<div style="display: table; width: 100%;">
+    <div style="display: table-row-group;">
+        <div style="display: table-row;">
+            <div style="display: table-cell; width: 50%;">
+                <fieldset><legend>Open *.BIN File</legend>
+                    <input type="file" id="btn_readbinfile" />
+                </fieldset>
+            </div>
+            <div style="display: table-cell;">
+                <fieldset><legend>Save *.BIN File</legend>
+                    <input type="button" value="Save" onclick="saveBinFile()" />&nbsp;<input type="text" value="" id="txt_savefname" />
+                </fieldset>
+            </div>
+        </div>
+    </div>
+</div>
+
+<fieldset><legend>Options</legend>
+    <div>
+        <div style="display:inline-block; vertical-align:top;">
+            <div style="display: table; padding-right:30pt;">
+                <div style="display: table-row-group;" id="tbl_checkboxes"> </div>
+            </div>
+        </div>
+        <div style="display:inline-block; vertical-align:top;">
+            <div style="display: table;">
+                <div style="display: table-row-group;" id="tbl_sliders"></div>
+            </div>
+        </div>
+    </div>
+    <br />
+    <div>
+        <div style="display:inline-block; padding-right:30pt; min-width:200px;">
+            <fieldset><legend>RC Input</legend>
+                <select id="drop_rcinput">
+                    <option value="x_0">Automatic</option>
+                    <option value="x_1">DShot</option>
+                    <option value="x_2">Servo</option>
+                    <option value="x_3">Serial</option>
+                    <option value="x_4">EDTARM</option>
+                    <option value="x_5">??? 5</option>
+                    <option value="x_6">??? 6</option>
+                    <option value="x_7">??? 7</option>
+                    <option value="x_8">??? 8</option>
+                    <option value="x_9">??? 9</option>
+                </select>
+            </fieldset>
+        </div>
+        <div style="display:inline-block;">
+            <fieldset><legend><label for="txt_devicename">Device Name</label></legend>
+                <input type="text" id="txt_devicename" maxlength="12" />
+            </fieldset>
+        </div>
+    </div>
+</fieldset>
+<fieldset><legend>Debug</legend>
+<div style="width:100%;">
+<textarea id="txt_debug" style="width:100%; min-height:100px;">
+</textarea>
+</div>
+<div id="div_progress" style="width:100%; display: none;">
+<span id="txt_progress" style="width:100%; margin: 2pt 2pt 2pt 2pt;">&nbsp;</span>
+</div>
+</fieldset>
+<fieldset><legend>Serial Port&nbsp;<span id="span_serport"></span></legend>
+<div id="div_serialport">
+<input type="button" id="btn_serconnect" value="Connect" onclick="serport_connect()" />
+<input type="button" id="btn_serread"    value="Read"    onclick="serport_btnRead()" />
+<input type="button" id="btn_serwrite"   value="Write"   onclick="serport_btnWrite()" />
+<input type="button" id="btn_serrefresh" value="Refresh FW Info" onclick="serport_btnRefresh()" />
+<input type="button" id="btn_sererase"   value="Erase All"       onclick="serport_btnErase()" />
+<input type="button" id="btn_serrunapp"  value="Run App FW"      onclick="serport_btnRunApp()" />
+</div>
+<div id="div_serialport_download" style="display: none;">
+Unfortunately, the online version of this tool does not support serial port connections properly. To work around this, please download an offline copy of this page, using the "save as complete webpage" function of your web browser.
+</div>
+</fieldset>
+<fieldset id="fld_fwupdate" style="display: none;"><legend>FW Update (*.hex file)</legend>
+<input type="file" id="btn_fwupdate" />&nbsp;&nbsp;&nbsp;<input type="button" id="btn_fwdump" value="Dump Flash to *.bin" onclick="serport_fwdump()" />
+</fieldset>
+<fieldset><legend>About</legend>
+This is a tool to edit the EEPROM of a ESC running <a href="https://github.com/AlkaMotors/AM32-MultiRotor-ESC-firmware" target="_blank">AM32 firmware</a>. This tool is written with a combination of HTML, JavaScript, and WebSerial, which means it can be used both online and offline without any installation. It is completely free and open source, you can download an offline copy of this tool by simply clicking "save as complete webpage" in your web browser, or obtain it from its <a href="https://github.com/frank26080115/AM32-FW-Helpers" target="_blank">GitHub repo here</a>.
+</fieldset>
+</body>
+</html>
