@@ -93,13 +93,13 @@ void loop()
             if (ser_list[i]->available() > 0)
             {
                 char c = ser_list[i]->read();
-                if (c == '\n') // if enter key (or sent \n)
+                if (c == '\n' || c == '?') // if enter key (or sent \n)
                 {
                     rc_input = all_rc[i];
                     printer_pin = rc_input;
                     filter_out_one((uint32_t*)remaining_pins, rc_input); // remove the RC input pin from potential searched pins
                     printer = ser_list[i];
-                    state_machine = STATEMACH_TEST_PHASE_START;
+                    state_machine = c == '\n' ? STATEMACH_TEST_PHASE_START : STATEMACH_CMD_PROMPT;
                     // deactivate all other SoftwareSerial instances
                     for (uint8_t j = 0; j < rc_pin_cnt; j++)
                     {
@@ -237,6 +237,7 @@ void loop()
         printer->println("enter command key, one of: V (voltage monitor), C (current sensor monitor), L (LED search)");
         printer->listen();
         state_machine = STATEMACH_CMD_WAIT;
+        analogReadResolution(12); // this matches the resolution used by AM32
     }
     else if (state_machine == STATEMACH_CMD_WAIT)
     {
