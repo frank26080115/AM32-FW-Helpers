@@ -73,7 +73,7 @@ def main():
         raise Exception("error: no files specified")
     elif args.bootloader != 'x' and args.firmware != 'x':
         if args.replace == False:
-            if fw_ihex.minaddr() - 1 <= bl_ihex.maxaddr():
+            if fw_ihex.minaddr() <= bl_ihex.maxaddr():
                 raise Exception("error: firmware overlaps with bootloader")
             bl_ihex.merge(fw_ihex, overlap='ignore')
         else: # replace == True
@@ -115,7 +115,7 @@ def main():
         eep_ihex.loadbin(eep_fullpath, offset = base_address + eep_addr)
         if args.verbose:
             print("eeprom from 0x%08X to 0x%08X" % (eep_ihex.minaddr(), eep_ihex.maxaddr()))
-        if eep_ihex.minaddr() - 1 <= bl_ihex.maxaddr():
+        if eep_ihex.minaddr() <= bl_ihex.maxaddr():
             raise Exception("error: eeprom overlaps with firmware")
         if args.fresh:
             eep_ihex[base_address + eep_addr + 3] = 0
