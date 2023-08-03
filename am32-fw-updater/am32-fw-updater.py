@@ -95,6 +95,7 @@ def main():
         ser.open()
         if args.verbose:
             print("serial port opened")
+        time.sleep(1)
     except serial.SerialException as e:
         print('Could not open serial port {}: {}\n'.format(ser.name, e))
         quit()
@@ -196,6 +197,8 @@ def send_setaddress(ser, addr):
         x = append_crc(x)
         ser.write(x)
         y = ser.read(len(x) + 1)
+        if len(y) < len(x) + 1:
+            raise Exception("did not read enough data, len %u" % len(y))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
     except Exception as ex:
@@ -208,6 +211,8 @@ def send_setbuffer(ser, addr, buflen):
         x = append_crc(x)
         ser.write(x)
         y = ser.read(len(x))
+        if len(y) < len(x):
+            raise Exception("did not read enough data, len %u" % len(y))
         time.sleep(0.001)
     except Exception as ex:
         print("ERROR during set buffer command (@ 0x%04X %u), exception: %s" % (addr, buflen, ex))
@@ -218,6 +223,8 @@ def send_payload(ser, addr, x):
         x = append_crc(x)
         ser.write(x)
         y = ser.read(len(x) + 1)
+        if len(y) < len(x) + 1:
+            raise Exception("did not read enough data, len %u" % len(y))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
     except Exception as ex:
@@ -230,6 +237,8 @@ def send_flash(ser, addr):
         x = append_crc(x)
         ser.write(x)
         y = ser.read(len(x) + 1)
+        if len(y) < len(x) + 1:
+            raise Exception("did not read enough data, len %u" % len(y))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
     except Exception as ex:
