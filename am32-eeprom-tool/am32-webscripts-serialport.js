@@ -7,7 +7,7 @@ const ack_byte = 0x30;
 var serport_fifo = null;
 var serport_echocnt = 0;
 var serport_hasQuery = false;
-var serport_timeout = 500;
+var serport_timeout = 1000;
 const serport_timeout_default = 2000;
 const serport_startwait_default = 40;
 
