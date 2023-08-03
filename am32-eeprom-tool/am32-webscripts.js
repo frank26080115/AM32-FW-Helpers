@@ -198,7 +198,7 @@ function generateBin()
         buffer8[i] = 0xFF;
     }
     buffer8[0] = 1; // indicate filled
-    buffer8[1] = 1; // EEPROM layout version
+    buffer8[1] = eeprom_layout; 
     for (var i = 0; i < all_checkboxes.length; i++)
     {
         var c = all_checkboxes[i];

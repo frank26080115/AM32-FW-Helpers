@@ -23,6 +23,8 @@ var all_checkboxes = [
     ["Use Hall Sensors",       false, 39, ],
     ["Low Voltage Cutoff",     false, 36, ],
     ["Double Tap Reverse",     false, 38, ],
+    ["Sine Off on Brake",      false, 0x42, ],
+    ["Arm on Boot",            false, 0x43, ],
 ];
 
 var all_sliders = [
@@ -45,14 +47,16 @@ var all_sliders = [
     ["Servo Neutral"         ,  1500,  1374,  1629,      1,   1374,   34, false, ],
     ["Servo Dead Band"       ,     0,     0,   255,      1,      0,   35, false, ],
     ["Low Voltage Cutoff"    ,   330,   250,   505,      1,    250,   37, false, ],
-    ["Temperature Limit C"   ,   255,     0,   255,      1,      0,   43, false, ],
+    ["Temperature Limit C"   ,   255,     0,   255,      1,      0,   43, false, ], // 70 to 140
     ["Current Limit Amps"    ,     0,     0,   202,      2,      0,   44, false, ],
+    ["Ramp Up"               ,     0,     0,   255,      1,      0, 0x40, false, ],
+    ["Ramp Down"             ,     0,     0,   255,      1,      0, 0x41, false, ],
 ];
 
 var eeprom_offset = 0x7C00;
-var eeprom_useful_length = 0x30;
+var eeprom_useful_length = 0x50;
 var eeprom_total_length = 0xB0; // 176
-var eeprom_layout = 1;
+var eeprom_layout = 3;
 var device_id = [0x34, 0x37, 0x31, 0x02, 0x1F, 0x06, 0x06, 0x01, 0x30, ];
 var flash_start = 0x08000000;
 var flash_fw_start = 0x1000;
@@ -197,6 +201,9 @@ Unfortunately, the online version of this tool does not support serial port conn
 </fieldset>
 <fieldset><legend>About</legend>
 This is a tool to edit the EEPROM of a ESC running <a href="https://github.com/AlkaMotors/AM32-MultiRotor-ESC-firmware" target="_blank">AM32 firmware</a>. This tool is written with a combination of HTML, JavaScript, and WebSerial, which means it can be used both online and offline without any installation. It is completely free and open source, you can download an offline copy of this tool by simply clicking "save as complete webpage" in your web browser, or obtain it from its <a href="https://github.com/frank26080115/AM32-FW-Helpers" target="_blank">GitHub repo here</a>.
+<br />
+<br />
+This is the <b>Project Roach</b> edition of this tool, which adds a few additional options that are specific to the ESCs used in Project Roach.
 </fieldset>
 </body>
 </html>
