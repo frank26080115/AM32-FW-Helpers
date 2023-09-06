@@ -1,5 +1,5 @@
 import argparse
-import os, time
+import os, time, datetime
 from intelhex import IntelHex
 import serial
 from serial.tools.list_ports import comports
@@ -11,6 +11,7 @@ def main():
     parser.add_argument("-a", "--fwaddr",     metavar="fwaddr",     default="0x08001000", type=str, help="firmware start address")
     parser.add_argument("-e", "--eepromaddr", metavar="eepromaddr", default="0x7C00",     type=str, help="eeprom address")
     parser.add_argument("-c", "--chunksize",  metavar="chunksize",  default="128",        type=str, help="chunk size")
+    parser.add_argument("-m", "--mcu",        metavar="mcu",        default="",           type=str, help="MCU (overrides addresses)")
     parser.add_argument("-v", "--verbose",                          action="store_true",            help="verbose")
     args = parser.parse_args()
 
@@ -41,25 +42,47 @@ def main():
     if args.verbose:
         print("\tfrom 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
 
-    if "0x" in args.fwaddr.lower():
-        fwaddr = int(args.fwaddr, 16)
-    else:
-        try:
-            fwaddr = int(args.fwaddr, 10)
-        except:
+    mcu = None
+    addr_multi = 1
+    if args.mcu is not None and len(args.mcu) > 0:
+        mcu = args.mcu.strip().lower()
+        if mcu == "f051":
+            fwaddr   = 0x08001000
+            eep_addr = 0x7C00
+            addr_multi = 1
+        elif mcu == "g071-64k":
+            fwaddr   = 0x08001000
+            eep_addr = 0xF800
+            addr_multi = 1
+        elif mcu == "g071-128k":
+            fwaddr   = 0x08001000
+            eep_addr = 0xF800
+            addr_multi = 4
+        else:
+            raise Exception("Unknown (or unsupported) MCU specified")
+
+    if mcu is None:
+        if "0x" in args.fwaddr.lower():
             fwaddr = int(args.fwaddr, 16)
+        else:
+            try:
+                fwaddr = int(args.fwaddr, 10)
+            except:
+                fwaddr = int(args.fwaddr, 16)
+
     if args.verbose:
         print("\tstart addr 0x%04X" % (fwaddr))
 
     fw_binarr = fw_ihex.tobinarray(start = fwaddr)
 
-    if "0x" in args.eepromaddr.lower():
-        eep_addr = int(args.eepromaddr, 16)
-    else:
-        try:
-            eep_addr = int(args.eepromaddr, 10)
-        except:
+    if mcu is None:
+        if "0x" in args.eepromaddr.lower():
             eep_addr = int(args.eepromaddr, 16)
+        else:
+            try:
+                eep_addr = int(args.eepromaddr, 10)
+            except:
+                eep_addr = int(args.eepromaddr, 16)
 
     if args.verbose:
         print("EEPROM address = 0x%04X" % (eep_addr))
@@ -80,6 +103,8 @@ def main():
         raise Exception("chunk size invalid, out of range (16 to 256)")
     if (1024 % chunksize) != 0:
         raise Exception("chunk size invalid, must reach page boundaries")
+    if mcu is not None and mcu == "g071-128k" and (chunksize % 4) != 0:
+        raise Exception("chunk size invalid, must be a multiple of 4")
 
     if args.verbose:
         print("chunk size = %u" % (chunksize))
@@ -95,7 +120,7 @@ def main():
         ser.open()
         if args.verbose:
             print("serial port opened")
-        time.sleep(1)
+        time.sleep(2)
     except serial.SerialException as e:
         print('Could not open serial port {}: {}\n'.format(ser.name, e))
         quit()
@@ -107,6 +132,9 @@ def main():
         thischunk = chunksize
         if (i + thischunk) >= len(fw_binarr):
             thischunk = len(fw_binarr) - i
+            while (thischunk % 4) != 0:
+                thischunk += 1
+                fw_binarr.append(0xFF)
             done = True
         barr = fw_binarr[i:i + thischunk]
 
@@ -114,7 +142,7 @@ def main():
             print("\r", end="")
         print("writing to 0x%04X    " % j, end="")
 
-        send_setaddress(ser, j)
+        send_setaddress(ser, int(j / addr_multi))
         send_setbuffer(ser, j, thischunk)
         send_payload(ser, j, barr)
         send_flash(ser, j)
@@ -128,8 +156,8 @@ def main():
     done = False
     while i < len(fw_binarr) and done == False:
         thischunk = chunksize
-        if (i + thischunk) >= len(fw_binarr):
-            thischunk = len(fw_binarr) - i
+        if (i + thischunk) >= len(fw_binarr): # past the end of the firmware blob
+            thischunk = len(fw_binarr) - i # set the chunk size to only be the remainder
             done = True
         barr = fw_binarr[i:i + thischunk]
 
@@ -139,7 +167,7 @@ def main():
 
         tries = 3
         while tries > 0:
-            send_setaddress(ser, j)
+            send_setaddress(ser, int(j / addr_multi))
             data = send_readcmd(ser, j, thischunk)
             if len(barr) != len(data):
                 raise Exception("verification read length at 0x%04X does not match, %u != %u" % (j, len(barr), len(data)))
@@ -149,7 +177,7 @@ def main():
             if wcrc == rcrc:
                 break
             if wcrc != rcrc and tries <= 0:
-                raise Exception("verification read contents at 0x%04X does not match,\r\n\tdata %s\r\n\tread %s\r\n" % (j, format_arr(barr), format_arr(data)))
+                raise Exception("verification read contents at 0x%04X does not match,\r\n\tdata %s\r\n\tread %s (%u %u %u)\r\n" % (j, format_arr(barr), format_arr(data), i, thischunk, len(fw_binarr)))
         i += thischunk
         j += thischunk
     print("\rfinished verification, all done")
@@ -189,18 +217,62 @@ def append_crc(data):
     data.append(((crc & 0xFF00) >> 8) & 0xFF)
     return data
 
+def read_serial(ser, rlen, timeout = 2):
+    tstart = datetime.datetime.now()
+    data = []
+    while rlen > 0:
+        x = ser.read(rlen)
+        if len(x) > 0:
+            data.extend(x)
+            rlen -= len(x)
+        tnow = datetime.datetime.now()
+        if (tnow - tstart).total_seconds() > timeout:
+            break
+        time.sleep(0)
+    return data
+
+def serial_write(ser, data, rlen = -1, chunk_sz = 512, timeout = 2):
+    tstart = datetime.datetime.now()
+    ret = []
+    while len(data) > 0:
+        if len(data) > chunk_sz and chunk_sz > 0:
+            this_chunk = data[0:chunk_sz]
+        else:
+            this_chunk = data
+        ser.write(this_chunk)
+        ser.flush()
+        r = read_serial(ser, len(this_chunk))
+        if len(r) > 0:
+            ret.extend(r)
+        else:
+            ser.close()
+            ser.open()
+        if len(data) > chunk_sz and chunk_sz > 0:
+            data = data[chunk_sz:]
+        else:
+            break
+        tnow = datetime.datetime.now()
+        if (tnow - tstart).total_seconds() > timeout:
+            break
+        time.sleep(0.01)
+    if rlen >= 0 and len(ret) < rlen:
+        r = read_serial(ser, rlen - len(ret))
+        if len(r) > 0:
+            ret.extend(r)
+    return ret
+
 def send_setaddress(ser, addr):
     try:
         x = bytearray([0xFF, 0x00, 0x00, 0x00])
         x[2] = (addr & 0xFF00) >> 8;
         x[3] = (addr & 0x00FF) >> 0;
         x = append_crc(x)
-        ser.write(x)
-        y = ser.read(len(x) + 1)
+        y = serial_write(ser, x, len(x) + 1)
         if len(y) < len(x) + 1:
-            raise Exception("did not read enough data, len %u" % len(y))
+            raise Exception("did not read enough data, len %u < %u" % (len(y), len(x) + 1))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
+        time.sleep(0.001) # this is only here to put a gap in the logic analyzer display, so I can decipher the stream visially
     except Exception as ex:
         print("ERROR during set address command (@ 0x%04X), exception: %s" % (addr, ex))
         quit()
@@ -209,11 +281,10 @@ def send_setbuffer(ser, addr, buflen):
     try:
         x = bytearray([0xFE, 0x00, 0, buflen])
         x = append_crc(x)
-        ser.write(x)
-        y = ser.read(len(x))
+        y = serial_write(ser, x, len(x))
         if len(y) < len(x):
-            raise Exception("did not read enough data, len %u" % len(y))
-        time.sleep(0.001)
+            raise Exception("did not read enough data, len %u < %u" % (len(y), len(x)))
+        time.sleep(0.0035) # requires a long timeout, the bootloader code is reliant on a timeout before running the parser, but we have no ACK to indicate if this has occured, so we must hard-code a delay
     except Exception as ex:
         print("ERROR during set buffer command (@ 0x%04X %u), exception: %s" % (addr, buflen, ex))
         quit()
@@ -221,10 +292,9 @@ def send_setbuffer(ser, addr, buflen):
 def send_payload(ser, addr, x):
     try:
         x = append_crc(x)
-        ser.write(x)
-        y = ser.read(len(x) + 1)
+        y = serial_write(ser, x, len(x) + 1)
         if len(y) < len(x) + 1:
-            raise Exception("did not read enough data, len %u" % len(y))
+            raise Exception("did not read enough data, len %u < %u" % (len(y), len(x) + 1))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
     except Exception as ex:
@@ -235,10 +305,9 @@ def send_flash(ser, addr):
     try:
         x = bytearray([0x01, 0x01])
         x = append_crc(x)
-        ser.write(x)
-        y = ser.read(len(x) + 1)
+        y = serial_write(ser, x, len(x) + 1)
         if len(y) < len(x) + 1:
-            raise Exception("did not read enough data, len %u" % len(y))
+            raise Exception("did not read enough data, len %u < %u" % (len(y), len(x) + 1))
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
     except Exception as ex:
@@ -249,15 +318,8 @@ def send_readcmd(ser, addr, buflen):
     try:
         x = bytearray([0x03, buflen])
         x = append_crc(x)
-        ser.write(x)
-        time.sleep(0.01)
-        y = bytearray()
         expected = len(x) + buflen + 3
-        remaining = expected
-        while len(y) < expected and remaining > 0:
-            z = ser.read(remaining)
-            remaining -= len(z)
-            y.extend(z)
+        y = serial_write(ser, x, expected)
         if y[-1] != 0x30:
             raise Exception("did not get valid ack, 0x%02X" % y[-1])
         y = y[len(x):]
