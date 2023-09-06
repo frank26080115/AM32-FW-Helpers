@@ -11,6 +11,7 @@ def main():
     parser.add_argument("-a", "--baseaddr", metavar="baseaddr", default="0x08000000", type=str, help="base address")
     parser.add_argument("-e", "--eeprom", metavar="eeprom", default=None, type=str, help="eeprom file")
     parser.add_argument("-x", "--eepromaddr", metavar="eepromaddr", default="0x7C00", type=str, help="eeprom address")
+    parser.add_argument("-m", "--mcu", metavar="mcu", default="", type=str, help="MCU (overrides addresses)")
     parser.add_argument("-o", "--outpath", metavar="outpath", default=None, type=str, help="output file path")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     args = parser.parse_args()
@@ -87,14 +88,31 @@ def main():
     elif args.bootloader == 'x':
         bl_ihex = fw_ihex
 
+    mcu = None
+    addr_multi = 1
+    if args.mcu is not None and len(args.mcu) > 0:
+        mcu = args.mcu.strip().lower()
+        if mcu == "f051":
+            eep_addr = 0x7C00
+            addr_multi = 1
+        elif mcu == "g071-64k":
+            eep_addr = 0xF800
+            addr_multi = 1
+        elif mcu == "g071-128k":
+            eep_addr = 0x1F800
+            addr_multi = 4
+        else:
+            raise Exception("Unknown (or unsupported) MCU specified")
+
     eep_justname = None
-    if "0x" in args.eepromaddr.lower():
-        eep_addr = int(args.eepromaddr, 16)
-    else:
-        try:
-            eep_addr = int(args.eepromaddr, 10)
-        except:
+    if mcu is None:
+        if "0x" in args.eepromaddr.lower():
             eep_addr = int(args.eepromaddr, 16)
+        else:
+            try:
+                eep_addr = int(args.eepromaddr, 10)
+            except:
+                eep_addr = int(args.eepromaddr, 16)
 
     if args.eeprom is not None:
         eep_fullpath = os.path.abspath(args.eeprom)
@@ -153,10 +171,17 @@ def main():
     if bl_ihex.maxaddr() < base_address + eep_addr:
         print("warning: no eeprom data")
 
-    if bl_ihex.maxaddr() >= base_address + (1024 * 64):
-        print("warning: data exceeds 64 kb")
-    elif bl_ihex.maxaddr() >= base_address + (1024 * 32):
+    if mcu is None:
+        if bl_ihex.maxaddr() >= base_address + (1024 * 64):
+            print("warning: data exceeds 64 kb")
+        elif bl_ihex.maxaddr() >= base_address + (1024 * 32):
+            print("warning: data exceeds 32 kb")
+    elif mcu == "f051" and bl_ihex.maxaddr() >= base_address + (1024 * 32):
         print("warning: data exceeds 32 kb")
+    elif mcu == "g071-64k" and bl_ihex.maxaddr() >= base_address + (1024 * 64):
+        print("warning: data exceeds 64 kb")
+    elif mcu == "g071-128k" and bl_ihex.maxaddr() >= base_address + (1024 * 128):
+        print("warning: data exceeds 128 kb")
 
     if args.verbose:
         print("saving to %s" % out_abspath)
