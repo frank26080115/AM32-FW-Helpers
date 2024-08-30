@@ -12,6 +12,7 @@ def main():
     parser.add_argument("-e", "--eeprom", metavar="eeprom", default=None, type=str, help="eeprom file")
     parser.add_argument("-x", "--eepromaddr", metavar="eepromaddr", default="0x7C00", type=str, help="eeprom address")
     parser.add_argument("-m", "--mcu", metavar="mcu", default="", type=str, help="MCU (overrides addresses)")
+    parser.add_argument("--singlechunk", action="store_true", help="make sure output file is a single chunk hex file")
     parser.add_argument("-o", "--outpath", metavar="outpath", default=None, type=str, help="output file path")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     args = parser.parse_args()
@@ -98,6 +99,9 @@ def main():
         elif mcu == "g071-64k":
             eep_addr = 0xF800
             addr_multi = 1
+        elif mcu == "at421":
+            eep_addr = 0xF800
+            addr_multi = 1
         elif mcu == "g071-128k":
             eep_addr = 0x1F800
             addr_multi = 4
@@ -178,14 +182,43 @@ def main():
             print("warning: data exceeds 32 kb")
     elif mcu == "f051" and bl_ihex.maxaddr() >= base_address + (1024 * 32):
         print("warning: data exceeds 32 kb")
-    elif mcu == "g071-64k" and bl_ihex.maxaddr() >= base_address + (1024 * 64):
+    elif (mcu == "g071-64k" or mcu == "at421") and bl_ihex.maxaddr() >= base_address + (1024 * 64):
         print("warning: data exceeds 64 kb")
     elif mcu == "g071-128k" and bl_ihex.maxaddr() >= base_address + (1024 * 128):
         print("warning: data exceeds 128 kb")
 
+    if args.singlechunk:
+        start_addr = bl_ihex.minaddr()
+        end_addr = bl_ihex.maxaddr()
+        existing_addresses = set(bl_ihex.addresses())
+        print("merging into single chunk, 0x%08X to 0x%08X" % (start_addr, end_addr))
+        addr = start_addr
+        while addr <= end_addr:
+            if addr not in existing_addresses:
+                bl_ihex[addr] = 0xFF
+            print("\r0x%08X / 0x%08X   " % (addr, end_addr), end="", flush=True)
+            addr += 1
+        print("\rdone merging           ")
+
     if args.verbose:
         print("saving to %s" % out_abspath)
-    bl_ihex.write_hex_file(out_abspath)
+    #bl_ihex.write_hex_file(out_abspath)
+
+    def write_hex_file_without_type_05(ih, filename):
+        import io
+        hex_str = io.StringIO()
+        ih.write_hex_file(hex_str)
+        hex_str.seek(0)
+        # Filter out the type 05 record
+        filtered_lines = []
+        for line in hex_str:
+            if line[7:9] != '05':  # Check the record type
+                filtered_lines.append(line)
+        # Write the filtered content to the file
+        with open(filename, 'w') as f:
+            f.writelines(filtered_lines)
+    write_hex_file_without_type_05(bl_ihex, out_abspath)
+
     if args.verbose == False:
         print("saved to %s" % out_abspath)
 
