@@ -10,6 +10,7 @@ def main():
     parser.add_argument("serialport",                               default="auto",       type=str, help="serial port name")
     parser.add_argument("-s", "--size",       metavar="size",       default="0x8000",     type=str, help="size of dump")
     parser.add_argument("-c", "--chunksize",  metavar="chunksize",  default="128",        type=str, help="chunk size")
+    parser.add_argument("-m", "--mcu",        metavar="mcu",        default="",           type=str, help="MCU (overrides addresses)")
     parser.add_argument("-v", "--verbose",                          action="store_true",            help="verbose")
     args = parser.parse_args()
 
@@ -37,6 +38,37 @@ def main():
         print("\t" + fw_fullpath)
         print("\t%s (%s)" % (fw_basename, fw_ext))
 
+    mcu = None
+    addr_multi = 1
+    if args.mcu is not None and len(args.mcu) > 0:
+        mcu = args.mcu.strip().lower()
+        if mcu == "f051":
+            fwaddr   = 0x08001000
+            eep_addr = 0x7C00
+            addr_multi = 1
+            fw_size = 0x8000
+        elif mcu == "g071-64k":
+            fwaddr   = 0x08001000
+            eep_addr = 0xF800
+            addr_multi = 1
+            #fw_size = 0x8000
+            fw_size = 0x10000
+        elif mcu == "g071-128k":
+            fwaddr   = 0x08001000
+            eep_addr = 0xF800
+            addr_multi = 4
+            #fw_size = 0x8000
+            fw_size = 0x20000
+        elif mcu == "at421" or mcu == "f421":
+            fwaddr   = 0x08001000
+            eep_addr = 0x7C00
+            addr_multi = 1
+            fw_size = 0x8000
+        else:
+            raise Exception("Unknown (or unsupported) MCU specified")
+        if args.verbose:
+            print("MCU \"%s\": FW-addr 0x%08X ; EEP-addr 0x%04X ; addr-multi = %u" % (mcu, fwaddr, eep_addr, addr_multi))
+
     if "0x" in args.chunksize.lower():
         chunksize = int(args.chunksize, 16)
     else:
@@ -55,13 +87,14 @@ def main():
     if args.verbose:
         print("chunk size = %u" % (chunksize))
 
-    if "0x" in args.size.lower():
-        fw_size = int(args.size, 16)
-    else:
-        try:
-            fw_size = int(args.size, 10)
-        except:
+    if mcu is None:
+        if "0x" in args.size.lower():
             fw_size = int(args.size, 16)
+        else:
+            try:
+                fw_size = int(args.size, 10)
+            except:
+                fw_size = int(args.size, 16)
 
     ser = serial.serial_for_url(port_name, do_not_open=True)
     ser.baudrate = 19200
@@ -102,6 +135,8 @@ def main():
             elif tries <= 0:
                 raise Exception("too many CRC errors at 0x%04X\r\n" % (i))
         i += thischunk
+    with open(fw_fullpath, "wb") as f:
+        f.write(fw_barr)
     print("\rfinished dumping to file \"%s\", all done" % fw_fullpath)
 
 def get_all_comports(to_print):
