@@ -12,6 +12,9 @@ def main():
     parser.add_argument("-e", "--eepromaddr", metavar="eepromaddr", default="0x7C00",     type=str, help="eeprom address")
     parser.add_argument("-c", "--chunksize",  metavar="chunksize",  default="128",        type=str, help="chunk size")
     parser.add_argument("-m", "--mcu",        metavar="mcu",        default="",           type=str, help="MCU (overrides addresses)")
+    parser.add_argument("-E", "--iseep",                            action="store_true",            help="is eeprom file")
+    parser.add_argument("-i", "--inceep",                           action="store_true",            help="fw includes eeprom")
+    parser.add_argument("-b", "--bindump",                          action="store_true",            help="fw bin is a dump")
     parser.add_argument("-v", "--verbose",                          action="store_true",            help="verbose")
     args = parser.parse_args()
 
@@ -31,16 +34,12 @@ def main():
     fw_justname = fw_namesplit[0].strip()
     fw_ext = fw_namesplit[1].strip().lower()
     if args.verbose:
-        print("firmware:")
+        if args.iseep == False:
+            print("firmware:")
+        else:
+            print("eeprom file:")
         print("\t" + fw_fullpath)
         print("\t%s (%s)" % (fw_basename, fw_ext))
-
-    if fw_ext != ".hex":
-        raise Exception("unknown firmware file type, must be *.hex")
-
-    fw_ihex = IntelHex(fw_fullpath)
-    if args.verbose:
-        print("\tfrom 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
 
     mcu = None
     addr_multi = 1
@@ -58,8 +57,14 @@ def main():
             fwaddr   = 0x08001000
             eep_addr = 0xF800
             addr_multi = 4
+        elif mcu == "at421" or mcu == "f421":
+            fwaddr   = 0x08001000
+            eep_addr = 0x7C00
+            addr_multi = 1
         else:
             raise Exception("Unknown (or unsupported) MCU specified")
+        if args.verbose:
+            print("MCU \"%s\": FW-addr 0x%08X ; EEP-addr 0x%04X ; addr-multi = %u" % (fwaddr, eep_addr, addr_multi))
 
     if mcu is None:
         if "0x" in args.fwaddr.lower():
@@ -69,13 +74,6 @@ def main():
                 fwaddr = int(args.fwaddr, 10)
             except:
                 fwaddr = int(args.fwaddr, 16)
-
-    if args.verbose:
-        print("\tstart addr 0x%04X" % (fwaddr))
-
-    fw_binarr = fw_ihex.tobinarray(start = fwaddr)
-
-    if mcu is None:
         if "0x" in args.eepromaddr.lower():
             eep_addr = int(args.eepromaddr, 16)
         else:
@@ -85,9 +83,62 @@ def main():
                 eep_addr = int(args.eepromaddr, 16)
 
     if args.verbose:
-        print("EEPROM address = 0x%04X" % (eep_addr))
+        print("FW-addr 0x%08X ; EEP-addr 0x%04X ; addr-multi = %u" % (fwaddr, eep_addr, addr_multi))
 
-    fw_binarr = fw_binarr[:eep_addr - (fwaddr & 0xFFFF)]
+    if args.iseep == False:
+        if fw_ext == ".hex":
+            fw_ihex = IntelHex(fw_fullpath)
+        elif fw_ext == ".bin":
+            fw_ihex = IntelHex()
+            if args.bindump:
+                adr = fwaddr & 0xFFFF0000
+            else:
+                adr = fwaddr
+            with open(fw_fullpath, "rb") as f:
+                x = f.read(1)
+                while x != b"":
+                    fw_ihex[adr] = x[0]
+                    x = f.read(1)
+                    adr += 1
+        else:
+            raise Exception("unknown firmware file type")
+        if args.verbose:
+            print("\tfrom 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
+    else:
+        fw_ihex = IntelHex()
+        if fw_ext == ".csv":
+            with open(fw_fullpath, "r") as f:
+                lines = f.readlines()
+                i = 0
+                for li in lines:
+                    split = li.split(',')
+                    if len(split) > 1:
+                        last_str = split[-1].strip().lower()
+                        try:
+                            if "x" in last_str:
+                                b = int(last_str, 16)
+                            else:
+                                b = int(last_str)
+                        except:
+                            b = 0
+                        fw_ihex[i] = b
+                        i += 1
+            if args.verbose:
+                print("CSV EEPROM loaded %u bytes (to 0x%04X)" % (i, fw_ihex.maxaddr()))
+        elif fw_ext == ".bin":
+            fw_ihex.loadbin(fw_fullpath)
+            if args.verbose:
+                print("raw binary EEPROM loaded %u bytes" % (fw_ihex.maxaddr() + 1))
+        else:
+            raise Exception("unknown eeprom file type, must be *.bin")
+
+    if args.iseep == False:
+        fw_binarr = fw_ihex.tobinarray(start = fwaddr)
+    else: # is eeprom
+        fw_binarr = fw_ihex.tobinarray(start = 0)
+
+    if args.iseep == False and args.inceep == False:
+        fw_binarr = fw_binarr[:eep_addr - (fwaddr & 0xFFFF)]
 
     if "0x" in args.chunksize.lower():
         chunksize = int(args.chunksize, 16)
@@ -106,9 +157,6 @@ def main():
     if mcu is not None and mcu == "g071-128k" and (chunksize % 4) != 0:
         raise Exception("chunk size invalid, must be a multiple of 4")
 
-    if args.verbose:
-        print("chunk size = %u" % (chunksize))
-
     ser = serial.serial_for_url(port_name, do_not_open=True)
     ser.baudrate = 19200
     ser.bytesize = serial.EIGHTBITS
@@ -126,7 +174,15 @@ def main():
         quit()
 
     i = 0
-    j = fwaddr & 0xFFFF
+    if args.iseep == False:
+        start_addr = fwaddr & 0xFFFF
+    else:
+        start_addr = eep_addr
+
+    if args.verbose:
+        print("array size = %u ; start addr = 0x%04X ; chunk size = %u" % (len(fw_binarr), start_addr, chunksize))
+
+    j = start_addr
     done = False
     while i < len(fw_binarr) and done == False:
         thischunk = chunksize
@@ -152,7 +208,7 @@ def main():
     print("\rfinished all writes, begin verification...")
 
     i = 0
-    j = fwaddr & 0xFFFF
+    j = start_addr
     done = False
     while i < len(fw_binarr) and done == False:
         thischunk = chunksize
