@@ -28,6 +28,25 @@ def main():
     if args.verbose:
         print("base address 0x%08X" % base_address)
 
+    mcu = None
+    addr_multi = 1
+    if args.mcu is not None and len(args.mcu) > 0:
+        mcu = args.mcu.strip().lower()
+        if mcu == "f051" or mcu == "f031" or mcu == "gde230":
+            eep_addr = 0x7C00
+            addr_multi = 1
+        elif mcu == "g071" or mcu == "g071-64k" or mcu == "l431":
+            eep_addr = 0xF800
+            addr_multi = 1
+        elif mcu == "at421" or mcu == "atf415" or mcu == "g031" or mcu == "g431" or mcu == "v203":
+            eep_addr = 0xF800
+            addr_multi = 1
+        elif mcu == "g071-128k" or mcu == "atf415-128k":
+            eep_addr = 0x1F800
+            addr_multi = 4
+        else:
+            raise Exception(f"Unknown (or unsupported) MCU specified, unable to understand \"{mcu}\"")
+
     bl_justname = None
     if args.bootloader != 'x':
         bl_fullpath = os.path.abspath(args.bootloader)
@@ -63,10 +82,19 @@ def main():
             print("\t" + fw_fullpath)
             print("\t%s (%s)" % (fw_basename, fw_ext))
 
-        if fw_ext != ".hex":
-            raise Exception("unknown firmware file type, must be *.hex")
-
-        fw_ihex = IntelHex(fw_fullpath)
+        if fw_ext == ".hex":
+            fw_ihex = IntelHex(fw_fullpath)
+        elif fw_ext == ".bin":
+            fw_ihex = IntelHex()
+            if args.bootloader != 'x':
+                offset_addr = base_address + 0x1000
+                print("warning: user specified FW as *.bin file, assumed to start at 0x%08X" % (offset_addr))
+            else:
+                offset_addr = base_address
+                print("warning: user specified FW as *.bin file without a bootloader file specified, assumed to start at 0x%08X" % (offset_addr))
+            fw_ihex.loadbin(fw_fullpath, offset = offset_addr)
+        else:
+            raise Exception("unknown firmware file type, must be *.hex or *.bin")
 
         if args.verbose:
             print("fw from 0x%08X to 0x%08X" % (fw_ihex.minaddr(), fw_ihex.maxaddr()))
@@ -88,25 +116,6 @@ def main():
             print("merged data from 0x%08X to 0x%08X" % (bl_ihex.minaddr(), bl_ihex.maxaddr()))
     elif args.bootloader == 'x':
         bl_ihex = fw_ihex
-
-    mcu = None
-    addr_multi = 1
-    if args.mcu is not None and len(args.mcu) > 0:
-        mcu = args.mcu.strip().lower()
-        if mcu == "f051":
-            eep_addr = 0x7C00
-            addr_multi = 1
-        elif mcu == "g071-64k":
-            eep_addr = 0xF800
-            addr_multi = 1
-        elif mcu == "at421":
-            eep_addr = 0xF800
-            addr_multi = 1
-        elif mcu == "g071-128k":
-            eep_addr = 0x1F800
-            addr_multi = 4
-        else:
-            raise Exception("Unknown (or unsupported) MCU specified")
 
     eep_justname = None
     if mcu is None:
